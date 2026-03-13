@@ -184,7 +184,9 @@ unsafe fn set_submenu(menu: HMENU, path: &[i32], text_key: TextKey) {
         cch: wide.len() as u32,
         ..zeroed()
     };
-    let _ = SetMenuItemInfoW(parent, *path.last().unwrap() as u32, 1, &mut info);
+    if let Some(last) = path.last() {
+        let _ = SetMenuItemInfoW(parent, *last as u32, 1, &mut info);
+    }
 }
 
 unsafe fn set_menu_by_command(menu: HMENU, command_id: u16, text_key: TextKey) {

@@ -140,9 +140,11 @@ pub fn run() -> i32 {
 
 unsafe fn app() -> &'static mut App {
     let app_instance = std::ptr::addr_of_mut!(APP_INSTANCE);
-    (*app_instance)
-        .as_mut()
-        .expect("application instance should exist")
+    if let Some(app) = (*app_instance).as_mut() {
+        app
+    } else {
+        windows_sys::Win32::System::Threading::ExitProcess(0);
+    }
 }
 
 unsafe extern "system" fn perf_frame_wndproc(
