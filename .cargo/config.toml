@@ -1,2 +1,9 @@
 [build]
 target = "x86_64-pc-windows-msvc"
+
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+    "-C", "link-arg=/DEBUG:NONE",
+    "-C", "link-arg=/PDBALTPATH:none",
+    "-C", "link-arg=/PDB:NONE",
+]
