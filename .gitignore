@@ -1,0 +1,6 @@
+target/
+.vs/
+*.user
+*.aps
+*.ncb
+*.mdp
