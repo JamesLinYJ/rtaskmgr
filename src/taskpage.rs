@@ -27,7 +27,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BeginDeferWindowPos, CascadeWindows, CheckMenuRadioItem, DeferWindowPos, DestroyIcon,
     DestroyMenu, DrawMenuBar, EnableMenuItem, EndDeferWindowPos, GCL_HICON, GCL_HICONSM,
-    GetClassLongPtrW, GetClientRect, GetDesktopWindow, GetDlgItem, GetSubMenu, GetWindow,
+    GetClassLongW, GetClientRect, GetDesktopWindow, GetDlgItem, GetSubMenu, GetWindow,
     GetWindowLongW, GetWindowThreadProcessId, HICON, InternalGetWindowText, IsHungAppWindow,
     IsIconic, IsWindowVisible, LoadImageW,
     LoadMenuW, PostMessageW, RemoveMenu, SendMessageTimeoutW, SendMessageW, SetForegroundWindow,
@@ -1175,7 +1175,7 @@ unsafe fn fetch_window_icon(hwnd: HWND, small: bool) -> HICON {
         return result as HICON;
     }
 
-    let class_icon = GetClassLongPtrW(hwnd, if small { GCL_HICONSM } else { GCL_HICON });
+    let class_icon = GetClassLongW(hwnd, if small { GCL_HICONSM } else { GCL_HICON }) as usize;
     if class_icon != 0 {
         class_icon as HICON
     } else {

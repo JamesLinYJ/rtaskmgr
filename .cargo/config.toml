@@ -7,3 +7,19 @@ rustflags = [
     "-C", "link-arg=/PDBALTPATH:none",
     "-C", "link-arg=/PDB:NONE",
 ]
+
+[target.i686-pc-windows-msvc]
+linker = "rust-lld"
+rustflags = [
+    "-C", "link-arg=/DEBUG:NONE",
+    "-C", "link-arg=/PDBALTPATH:none",
+    "-C", "link-arg=/PDB:NONE",
+]
+
+[target.aarch64-pc-windows-msvc]
+linker = "rust-lld"
+rustflags = [
+    "-C", "link-arg=/DEBUG:NONE",
+    "-C", "link-arg=/PDBALTPATH:none",
+    "-C", "link-arg=/PDB:NONE",
+]

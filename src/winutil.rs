@@ -87,20 +87,28 @@ pub const fn make_int_resource(id: u16) -> *const u16 {
     id as usize as *const u16
 }
 
+unsafe fn set_window_long_ptr_value(hwnd: HWND, index: i32, value: isize) -> isize {
+    SetWindowLongPtrW(hwnd, index, value as _) as isize
+}
+
+unsafe fn get_window_long_ptr_value(hwnd: HWND, index: i32) -> isize {
+    GetWindowLongPtrW(hwnd, index) as isize
+}
+
 pub unsafe fn set_window_userdata(hwnd: HWND, value: isize) {
-    SetWindowLongPtrW(hwnd, GWLP_USERDATA, value);
+    let _ = set_window_long_ptr_value(hwnd, GWLP_USERDATA, value);
 }
 
 pub unsafe fn get_window_userdata(hwnd: HWND) -> isize {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA)
+    get_window_long_ptr_value(hwnd, GWLP_USERDATA)
 }
 
 pub unsafe fn set_style(hwnd: HWND, style: u32) {
-    SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
+    let _ = set_window_long_ptr_value(hwnd, GWL_STYLE, style as isize);
 }
 
 pub unsafe fn set_dialog_msg_result(hwnd: HWND, value: isize) {
-    SetWindowLongPtrW(hwnd, DWLP_MSGRESULT as i32, value);
+    let _ = set_window_long_ptr_value(hwnd, DWLP_MSGRESULT as i32, value);
 }
 
 pub fn width(rect: &RECT) -> i32 {
@@ -138,12 +146,12 @@ pub unsafe fn subclass_list_view(hwnd: HWND) {
         return;
     }
 
-    if GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == list_view_wnd_proc as *const () as usize as isize {
+    if get_window_long_ptr_value(hwnd, GWLP_WNDPROC) == list_view_wnd_proc as *const () as usize as isize {
         return;
     }
 
     ensure_list_view_paint_state();
-    let previous = SetWindowLongPtrW(
+    let previous = set_window_long_ptr_value(
         hwnd,
         GWLP_WNDPROC,
         list_view_wnd_proc as *const () as usize as isize,

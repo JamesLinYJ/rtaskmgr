@@ -78,6 +78,7 @@ use crate::winutil::{
 const STARTUP_MUTEX_NAME: &str = "NTShell Taskman Startup Mutex";
 const FINDME_TIMEOUT: u32 = 10_000;
 const RUN_DIALOG_CALC_DIRECTORY: u32 = 0x0000_0004;
+const NOTIFY_ICON_TIP_CAPACITY: usize = 128;
 
 static mut APP_INSTANCE: Option<App> = None;
 static mut FRAME_BASE_WNDPROC: Option<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> isize> = None;
@@ -903,7 +904,7 @@ impl App {
 
         let tip_wide = to_wide_null(tip);
         for (index, code_unit) in tip_wide.iter().copied().enumerate() {
-            if index >= data.szTip.len() {
+            if index >= NOTIFY_ICON_TIP_CAPACITY {
                 break;
             }
             data.szTip[index] = code_unit;
