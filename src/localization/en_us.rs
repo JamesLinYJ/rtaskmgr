@@ -1,3 +1,5 @@
+//! 英文（美国）语言表。
+
 use super::text_key::TextKey;
 
 pub fn resource(_id: u32) -> &'static str {

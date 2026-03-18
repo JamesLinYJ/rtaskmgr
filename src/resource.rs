@@ -1,5 +1,8 @@
 ﻿pub const TASK_PAGE: usize = 0;
 pub const PROC_PAGE: usize = 1;
+
+// 资源 ID 常量集中定义在这里，Rust 代码与 `.rc` 文件都依赖这些编号保持一致。
+
 pub const PERF_PAGE: usize = 2;
 pub const NET_PAGE: usize = 3;
 pub const USER_PAGE: usize = 4;

@@ -1,4 +1,8 @@
 use std::cmp::Ordering;
+
+// 进程页实现。
+// 这里负责采集进程列表、计算每轮刷新之间的增量数据、维护排序状态，
+// 并处理结束进程、调试、设置优先级和亲和性等操作。
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::mem::{size_of, zeroed};
@@ -60,8 +64,8 @@ use crate::localization::{localize_dialog, localize_menu};
 use crate::resource::*;
 use crate::winutil::{
     append_32_bit_suffix, get_window_userdata, is_32_bit_process_handle, load_string, loword,
-    make_int_resource, sanitize_task_manager_menu, set_window_userdata, subclass_list_view,
-    to_wide_null,
+    make_int_resource, finish_list_view_update, sanitize_task_manager_menu, set_window_userdata,
+    subclass_list_view, to_wide_null,
 };
 
 const PROCESS_COLUMNS: [ProcessColumn; NUM_COLUMN] = [
@@ -208,6 +212,7 @@ struct AffinityDialogContext {
 }
 
 pub struct ProcessPageState {
+    // 进程页状态对象持有采样缓存、排序设置、列配置以及当前选中项。
     hinstance: HINSTANCE,
     hwnd_page: HWND,
     main_hwnd: HWND,
@@ -268,6 +273,8 @@ impl ProcessPageState {
         hwnd_page: HWND,
         main_hwnd: HWND,
     ) -> Result<(), u32> {
+        // 进程页初始化主要做三件事：
+        // 加载文案、准备调试器路径、并把 ListView 切到更适合频繁刷新的显示模式。
         self.hinstance = hinstance;
         self.hwnd_page = hwnd_page;
         self.main_hwnd = main_hwnd;
@@ -283,6 +290,8 @@ impl ProcessPageState {
     }
 
     pub unsafe fn apply_options(&mut self, options: &Options, processor_count: usize) {
+        // 进程页的选项既影响行为，也影响列结构。
+        // 当列配置发生变化时，直接重建列和数据比做局部修补更可靠。
         self.no_title = options.no_title();
         self.confirmations = options.confirmations();
         self.show_16bit = options.show_16bit();
@@ -313,6 +322,7 @@ impl ProcessPageState {
     }
 
     pub unsafe fn handle_notify(&mut self, lparam: LPARAM) -> isize {
+        // ListView 处于 owner-data 风格，因此文本、排序和选择同步都靠通知消息驱动。
         let notify_header = &*(lparam as *const NMHDR);
         match notify_header.code {
             code if code == LVN_GETDISPINFOW => {
@@ -380,6 +390,8 @@ impl ProcessPageState {
     }
 
     pub unsafe fn show_context_menu(&mut self, x: i32, y: i32) {
+        // 右键菜单会按当前选中进程和系统能力动态裁剪，
+        // 例如 WOW 任务不支持完整优先级/调试操作。
         self.selected_pid = self.current_selected_pid();
         let Some(entry) = self.selected_entry() else {
             return;
@@ -454,6 +466,7 @@ impl ProcessPageState {
     }
 
     pub unsafe fn size_page(&self) {
+        // 进程页布局以“列表吃掉剩余空间，按钮贴右下角”为核心规则。
         let mut parent_rect = zeroed::<RECT>();
         GetClientRect(self.hwnd_page, &mut parent_rect);
 
@@ -543,6 +556,7 @@ impl ProcessPageState {
     }
 
     unsafe fn load_strings(&mut self) {
+        // 常用错误文案和优先级文本在这里集中缓存，避免命令执行路径上反复查资源。
         self.strings.warning = load_string(self.hinstance, IDS_WARNING);
         self.strings.invalid_option = load_string(self.hinstance, IDS_INVALIDOPTION);
         self.strings.no_affinity_mask = load_string(self.hinstance, IDS_NOAFFINITYMASK);
@@ -561,6 +575,8 @@ impl ProcessPageState {
     }
 
     unsafe fn update_ui_state(&self) {
+        // 当前实现里只有“结束进程”按钮依赖选择状态，
+        // 但统一收口在这里，后续扩展其它按钮更容易。
         let has_selection = self.current_selected_pid().is_some();
         let terminate_button = GetDlgItem(self.hwnd_page, IDC_TERMINATE);
         if !terminate_button.is_null() {
@@ -569,6 +585,8 @@ impl ProcessPageState {
     }
 
     unsafe fn refresh_processes(&mut self) {
+        // 刷新过程分为“采样 -> 合并历史 -> 排序 -> 重建 ListView”四步，
+        // 这样既能保留增量列，又能避免界面状态与采样结果错位。
         let previous_selection = self.current_selected_pid().or(self.selected_pid);
         let system_total = current_system_time();
         let total_delta = system_total.saturating_sub(self.previous_system_time);
@@ -623,6 +641,7 @@ impl ProcessPageState {
     }
 
     unsafe fn rebuild_listview(&mut self) {
+        // 这里优先复用现有行，只在身份变化时替换整行，以减少闪烁和选择状态丢失。
         let list_hwnd = self.list_hwnd();
         SendMessageW(list_hwnd, WM_SETREDRAW, 0, 0);
 
@@ -679,7 +698,7 @@ impl ProcessPageState {
             self.entries[index].dirty_columns = DirtyColumns::default();
         }
 
-        SendMessageW(list_hwnd, WM_SETREDRAW, 1, 0);
+        finish_list_view_update(list_hwnd);
 
         if selected_index.is_none() {
             self.selected_pid = None;
@@ -794,6 +813,8 @@ impl ProcessPageState {
     }
 
     unsafe fn save_column_widths(&mut self, options: &mut Options) {
+        // 列宽始终按“当前显示列顺序”写回配置，而不是按枚举顺序写，
+        // 这样下次恢复时才能对上用户真正看到的列布局。
         for value in options.column_widths.iter_mut() {
             *value = -1;
         }
@@ -831,6 +852,7 @@ impl ProcessPageState {
     }
 
     unsafe fn quick_confirm(&self, title: &str, body: &str) -> bool {
+        // 用户关闭“确认”选项后，危险操作直接放行，保持与原版 Task Manager 行为一致。
         if !self.confirmations {
             return true;
         }
@@ -1196,6 +1218,8 @@ unsafe fn apply_selected_columns(hwnd: HWND, options: &mut Options) {
 }
 
 unsafe fn load_debugger_path() -> Option<String> {
+    // 进程页的“调试”命令依赖 AeDebug 注册表配置。
+    // 这里只提取真正的可执行文件路径，过滤掉旧式 drwtsn32 之类的无效值。
     let mut key: HKEY = null_mut();
     let key_name = to_wide_null("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug");
     let value_name = to_wide_null("Debugger");
@@ -1247,6 +1271,8 @@ fn extract_first_command_token(command_line: &str) -> String {
 }
 
 unsafe fn query_process_identity(process_handle: HANDLE) -> (String, u32) {
+    // 从访问令牌补采用户名和 SessionId，
+    // 这是对 WTS 进程枚举结果的补强，能覆盖更多权限和边界情况。
     let mut token: HANDLE = null_mut();
     if OpenProcessToken(process_handle, TOKEN_QUERY, &mut token) == 0 || token.is_null() {
         return (String::new(), 0);
@@ -1340,6 +1366,8 @@ unsafe fn lookup_account_name_from_sid(sid: *mut core::ffi::c_void) -> String {
 }
 
 unsafe fn collect_process_identity_map() -> HashMap<u32, (String, u32)> {
+    // WTS 进程枚举能一次拿到大量进程对应的 SID / Session 信息，
+    // 先建表再回填到快照里，比逐进程单查用户名更高效。
     let mut identities = HashMap::new();
     let mut process_info = null_mut::<WTS_PROCESS_INFOW>();
     let mut count = 0u32;
@@ -1417,6 +1445,8 @@ fn compare_entries(
     sort_column: ColumnId,
     sort_direction: i32,
 ) -> Ordering {
+    // WOW 16 位任务在排序时借用父进程的一部分上下文，
+    // 这样用户按 CPU/用户名等列排序时，父子条目不会表现得完全割裂。
     let left_proxy = sort_proxy_entry(left, sort_context);
     let right_proxy = sort_proxy_entry(right, sort_context);
 
@@ -1494,6 +1524,8 @@ fn sort_proxy_entry<'a>(entry: &'a ProcEntry, sort_context: &'a HashMap<u32, Pro
 }
 
 fn column_text(entry: &ProcEntry, column_id: ColumnId, strings: &ProcessStrings) -> String {
+    // 所有列表文本都统一从这里派生，便于保持格式一致，
+    // 也方便 owner-data 回调按列生成内容。
     match column_id {
         ColumnId::ImageName => append_32_bit_suffix(&entry.image_name, entry.is_32_bit),
         ColumnId::Pid => entry.pid.to_string(),
@@ -1555,6 +1587,7 @@ unsafe fn collect_process_entries(
     total_delta: u64,
     show_16bit: bool,
 ) -> (Vec<ProcEntry>, HashMap<u32, PreviousProcSample>) {
+    // 采样阶段只构造“当下这一轮”的快照，真正的增量计算依赖外部传入的历史样本。
     let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if snapshot == INVALID_HANDLE_VALUE {
         return (Vec::new(), HashMap::new());
@@ -1711,6 +1744,8 @@ unsafe fn collect_wow_task_entries(
     entries: &mut Vec<ProcEntry>,
     next_samples: &mut HashMap<u32, PreviousProcSample>,
 ) {
+    // 16 位任务并不是独立进程，而是挂在 NTVDM 之下。
+    // 这里把父进程 CPU 时间拆分给子任务，并回写父项剩余时间显示。
     let Some(vdmdbg) = VdmDbgApi::load() else {
         return;
     };
@@ -1868,6 +1903,8 @@ unsafe extern "system" fn enum_wow_task_proc(
     file_name: *mut i8,
     lparam: LPARAM,
 ) -> i32 {
+    // 枚举回调每次代表一个 16 位任务线程；
+    // 它会把线程级 CPU 时间折算为任务行，并维护父 NTVDM 的剩余时间。
     let context = &mut *(lparam as *mut WowTaskEnumContext<'_>);
     let cpu_time_100ns = match read_thread_cpu_time_100ns(thread_id) {
         Some(value) => value,
@@ -1962,6 +1999,8 @@ fn same_entry_identity(existing: &ProcEntry, snapshot: &ProcEntry) -> bool {
 }
 
 fn update_process_entry(entry: &mut ProcEntry, snapshot: &ProcEntry, pass_count: u64) {
+    // 增量更新时只给真正变更的列打脏标记，
+    // 后续 ListView 才能做到“只重绘必要行/列”。
     entry.pass_count = pass_count;
 
     if entry.real_pid != snapshot.real_pid {

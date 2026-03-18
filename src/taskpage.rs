@@ -1,4 +1,8 @@
 use std::cmp::Ordering;
+
+// 应用页实现。
+// 该模块枚举顶层窗口，将其映射为任务列表中的行，并提供切换、平铺、
+// 层叠、最小化、结束任务等窗口级操作。
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 use std::sync::mpsc::{channel, Sender};
@@ -25,9 +29,9 @@ use windows_sys::Win32::UI::Controls::{
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyState;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BeginDeferWindowPos, CascadeWindows, CheckMenuRadioItem, DeferWindowPos, DestroyIcon,
+    BeginDeferWindowPos, CascadeWindows, CheckMenuRadioItem, CopyIcon, DeferWindowPos, DestroyIcon,
     DestroyMenu, DrawMenuBar, EnableMenuItem, EndDeferWindowPos, GCL_HICON, GCL_HICONSM,
-    GetClassLongW, GetClientRect, GetDesktopWindow, GetDlgItem, GetSubMenu, GetWindow,
+    GetClassLongPtrW, GetClientRect, GetDesktopWindow, GetDlgItem, GetSubMenu, GetWindow,
     GetWindowLongW, GetWindowThreadProcessId, HICON, InternalGetWindowText, IsHungAppWindow,
     IsIconic, IsWindowVisible, LoadImageW,
     LoadMenuW, PostMessageW, RemoveMenu, SendMessageTimeoutW, SendMessageW, SetForegroundWindow,
@@ -50,9 +54,8 @@ use crate::resource::{
 use crate::localization::{localize_menu, text, TextKey};
 use crate::winutil::{
     append_32_bit_suffix, is_32_bit_process_pid, load_string, make_int_resource,
-    sanitize_task_manager_menu, subclass_list_view, to_wide_null,
+    finish_list_view_update, sanitize_task_manager_menu, subclass_list_view, to_wide_null,
 };
-
 const TASK_COLUMNS: [TaskColumn; 4] = [
     TaskColumn::new(IDS_COL_TASKNAME, 250),
     TaskColumn::new(IDS_COL_TASKSTATUS, 97),
@@ -62,6 +65,9 @@ const TASK_COLUMNS: [TaskColumn; 4] = [
 
 const ACTIVE_COLUMNS: [TaskColumnId; 2] = [TaskColumnId::Name, TaskColumnId::Status];
 const ICON_FETCH_TIMEOUT_MS: u32 = 100;
+const ICON_SMALL: usize = 0;
+const ICON_BIG: usize = 1;
+const ICON_SMALL2: usize = 2;
 const DEFAULT_MARGIN: i32 = 8;
 const MAXIMUM_ALLOWED_ACCESS: u32 = 0x0200_0000;
 const TEXT_CALLBACK_WIDE: *mut u16 = -1isize as *mut u16;
@@ -150,6 +156,7 @@ impl DirtyTaskColumns {
 }
 
 pub struct TaskPageState {
+    // 任务页状态对象持有窗口列表、图标列表以及与任务视图相关的排序/选择状态。
     hinstance: HINSTANCE,
     hwnd_page: HWND,
     main_hwnd: HWND,
@@ -205,6 +212,8 @@ impl TaskPageState {
     }
 
     pub unsafe fn prepare_initialize(&mut self, hinstance: HINSTANCE, main_hwnd: HWND) -> Result<(), u32> {
+        // 任务页真正创建窗口前，先把后台枚举线程和图标列表资源准备好，
+        // 避免页面显示出来后才临时分配这些较重的对象。
         self.hinstance = hinstance;
         self.main_hwnd = main_hwnd;
         self.start_worker_thread();
@@ -267,6 +276,7 @@ impl TaskPageState {
     }
 
     pub unsafe fn handle_init_dialog(&mut self, hwnd_page: HWND) -> isize {
+        // 页面窗口建立后，图标列表和 ListView 才能真正绑定到控件上。
         self.hwnd_page = hwnd_page;
         self.reset_imagelists();
 
@@ -287,6 +297,7 @@ impl TaskPageState {
     }
 
     pub unsafe fn complete_initialize(&mut self) -> Result<(), u32> {
+        // 后置初始化统一负责“建列 -> 应用视图模式 -> 首次采样 -> 首次布局”。
         self.setup_columns()?;
         self.apply_view_mode(ViewMode::Details as i32);
         self.refresh_tasks();
@@ -295,6 +306,7 @@ impl TaskPageState {
     }
 
     pub unsafe fn apply_options(&mut self, options: &Options) {
+        // 任务页的运行期选项主要影响无标题模式、切换后最小化，以及列表视图样式。
         self.no_title = options.no_title();
         self.minimize_on_use = options.minimize_on_use();
         if self.current_view_mode != options.view_mode {
@@ -332,6 +344,7 @@ impl TaskPageState {
     }
 
     pub unsafe fn handle_notify(&mut self, lparam: LPARAM) -> isize {
+        // 任务页同样依赖 ListView 通知来驱动选择同步、双击切换和列表排序。
         let notify_header = &*(lparam as *const NMHDR);
         match notify_header.code {
             code if code == LVN_GETDISPINFOW => {
@@ -375,6 +388,8 @@ impl TaskPageState {
     }
 
     pub unsafe fn handle_command(&mut self, command_id: u16) {
+        // 任务页命令大多直接映射到窗口管理动作：
+        // 切换、平铺、层叠、最小化、最大化、结束任务或跳转到进程页。
         match command_id {
             IDM_LARGEICONS | IDM_SMALLICONS | IDM_DETAILS | IDM_RUN => {
                 SendMessageW(self.main_hwnd, WM_COMMAND, command_id as usize, 0);
@@ -444,6 +459,7 @@ impl TaskPageState {
     }
 
     pub unsafe fn show_context_menu(&mut self, x: i32, y: i32) {
+        // 没有选择项时显示“视图菜单”，有选择项时显示“窗口操作菜单”。
         let selected_hwnds = self.selected_hwnds(true);
         let popup = if selected_hwnds.is_empty() {
             load_popup_menu(self.hinstance, IDR_TASKVIEW)
@@ -498,6 +514,7 @@ impl TaskPageState {
     }
 
     pub unsafe fn size_page(&self) {
+        // 任务页布局规则与进程页类似：列表控件吃满剩余区域，右下角保留操作按钮。
         let mut parent_rect = zeroed::<RECT>();
         GetClientRect(self.hwnd_page, &mut parent_rect);
         let hdwp = BeginDeferWindowPos(10);
@@ -557,6 +574,7 @@ impl TaskPageState {
     }
 
     unsafe fn setup_columns(&self) -> Result<(), u32> {
+        // 任务页列是固定集合，所以建列时可以完全按静态定义重建。
         let list_hwnd = self.list_hwnd();
         if list_hwnd.is_null() {
             return Err(windows_sys::Win32::Foundation::ERROR_INVALID_WINDOW_HANDLE);
@@ -585,6 +603,7 @@ impl TaskPageState {
     }
 
     unsafe fn apply_view_mode(&mut self, view_mode: i32) {
+        // 大图标/小图标/详细信息本质上是同一个 ListView 的不同 style 组合。
         self.current_view_mode = view_mode;
 
         let list_hwnd = self.list_hwnd();
@@ -623,6 +642,8 @@ impl TaskPageState {
     }
 
     unsafe fn refresh_tasks(&mut self) {
+        // 任务刷新采用“枚举窗口 -> 合并已有条目 -> 删除过期条目 -> 刷新 ListView”。
+        // 这样可以尽量复用已有行，减少窗口切换时的闪烁。
         let current_pass = self.pass_count;
 
         for worker_task in self.collect_tasks() {
@@ -660,6 +681,8 @@ impl TaskPageState {
     }
 
     fn start_worker_thread(&mut self) {
+        // 顶层窗口枚举可能涉及跨窗口站和桌面切换，
+        // 放到后台线程可以避免主线程在刷新时明显卡顿。
         if self.worker_sender.is_some() {
             return;
         }
@@ -692,6 +715,7 @@ impl TaskPageState {
     }
 
     unsafe fn collect_tasks(&self) -> Vec<WorkerTaskEntry> {
+        // 优先使用后台线程采样；如果线程不可用，再回退到当前窗口站的同步枚举。
         let Some(sender) = self.worker_sender.as_ref() else {
             return collect_tasks_current_winsta(self.main_hwnd);
         };
@@ -713,6 +737,7 @@ impl TaskPageState {
     }
 
     unsafe fn remove_stale_tasks(&mut self, current_pass: u64) {
+        // 过期任务不仅要从数据数组里删掉，还要同步修正 ImageList 索引偏移。
         let mut index = 0;
         while index < self.tasks.len() {
             if self.tasks[index].pass_count == current_pass {
@@ -741,6 +766,7 @@ impl TaskPageState {
     }
 
     unsafe fn update_task_listview(&mut self) {
+        // 更新 ListView 时先暂停重绘，批量完成替换/删除/插入后再统一恢复。
         let list_hwnd = self.list_hwnd();
         SendMessageW(list_hwnd, WM_SETREDRAW, 0, 0);
 
@@ -780,7 +806,7 @@ impl TaskPageState {
             self.tasks[index].dirty_columns = DirtyTaskColumns::default();
         }
 
-        SendMessageW(list_hwnd, WM_SETREDRAW, 1, 0);
+        finish_list_view_update(list_hwnd);
 
         self.selected_count = self.selected_count();
         self.update_ui_state();
@@ -936,6 +962,7 @@ impl TaskPageState {
 }
 
 unsafe fn load_popup_menu(hinstance: HINSTANCE, resource_id: u16) -> windows_sys::Win32::UI::WindowsAndMessaging::HMENU {
+    // 和其它页面一样，弹出菜单会先局部加载，再抽取第一个子菜单作为真正使用的 popup。
     let menu = LoadMenuW(hinstance, make_int_resource(resource_id));
     if menu.is_null() {
         return null_mut();
@@ -956,6 +983,8 @@ unsafe fn window_rect_relative_to_page(hwnd: HWND, page_hwnd: HWND) -> RECT {
 }
 
 unsafe fn collect_tasks_worker(main_hwnd: isize) -> Vec<WorkerTaskEntry> {
+    // 后台线程优先尝试枚举所有可访问窗口站；
+    // 如果结果为空，再回退到当前窗口站，兼顾完整性和稳健性。
     let mut tasks = Vec::new();
     let mut context = WindowStationEnumContext {
         tasks: &mut tasks as *mut Vec<WorkerTaskEntry>,
@@ -1006,6 +1035,7 @@ struct WindowEnumContext {
 }
 
 unsafe extern "system" fn enum_desktop_proc(desktop_name: *const u16, lparam: LPARAM) -> BOOL {
+    // 每个桌面都单独打开并枚举顶层窗口，最终合并到同一份任务列表。
     let context = &mut *(lparam as *mut WindowStationEnumContext);
     if desktop_name.is_null() {
         return 1;
@@ -1038,6 +1068,8 @@ unsafe extern "system" fn enum_desktop_proc(desktop_name: *const u16, lparam: LP
 }
 
 unsafe extern "system" fn enum_winstation_proc(winstation_name: *const u16, lparam: LPARAM) -> BOOL {
+    // 跨窗口站枚举前必须暂时切换进程窗口站，
+    // 枚举结束后再恢复原值，否则会污染当前 UI 线程上下文。
     let context = &mut *(lparam as *mut WindowStationEnumContext);
     if winstation_name.is_null() {
         return 1;
@@ -1076,6 +1108,7 @@ unsafe extern "system" fn enum_winstation_proc(winstation_name: *const u16, lpar
 }
 
 unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    // 任务列表只关心可见、无 owner 的顶层窗口，并显式排除我们自己的主窗口。
     let context = &mut *(lparam as *mut WindowEnumContext);
 
     if !GetWindow(hwnd, windows_sys::Win32::UI::WindowsAndMessaging::GW_OWNER).is_null()
@@ -1115,6 +1148,8 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
 }
 
 unsafe fn enum_desktops_for_current_winsta(context: &mut WindowStationEnumContext) {
+    // 某些环境下按窗口站直接枚举桌面会失败；
+    // 这时回退到当前线程桌面，保证至少能拿到当前桌面的任务窗口。
     if EnumDesktopsW(
         GetProcessWindowStation(),
         Some(enum_desktop_proc),
@@ -1138,6 +1173,8 @@ unsafe fn enum_desktops_for_current_winsta(context: &mut WindowStationEnumContex
 }
 
 unsafe fn current_user_object_name(handle: HANDLE) -> Option<String> {
+    // 窗口站和桌面名都通过 `GetUserObjectInformationW(UOI_NAME)` 读取，
+    // 这里统一封装成一个 UTF-16 -> Rust String 的助手。
     let mut needed = 0u32;
     GetUserObjectInformationW(handle, UOI_NAME, null_mut(), 0, &mut needed);
     if needed == 0 {
@@ -1161,29 +1198,64 @@ unsafe fn current_user_object_name(handle: HANDLE) -> Option<String> {
 }
 
 unsafe fn fetch_window_icon(hwnd: HWND, small: bool) -> HICON {
+    // 图标获取只走窗口自身暴露的 HICON 链路：
+    // 先查 WM_GETICON，再回退到类图标；同时复制句柄，确保后续释放是安全的。
+    let preferred_icon_types: &[usize] = if small {
+        &[ICON_SMALL2, ICON_SMALL, ICON_BIG]
+    } else {
+        &[ICON_BIG, ICON_SMALL, ICON_SMALL2]
+    };
+
+    for &icon_type in preferred_icon_types {
+        let icon = query_window_icon(hwnd, icon_type);
+        if !icon.is_null() {
+            return icon;
+        }
+    }
+
+    for &class_index in if small {
+        &[GCL_HICONSM, GCL_HICON]
+    } else {
+        &[GCL_HICON, GCL_HICONSM]
+    } {
+        let icon = query_class_icon(hwnd, class_index);
+        if !icon.is_null() {
+            return icon;
+        }
+    }
+
+    null_mut()
+}
+
+unsafe fn query_window_icon(hwnd: HWND, icon_type: usize) -> HICON {
     let mut result = 0usize;
     SendMessageTimeoutW(
         hwnd,
         WM_GETICON,
-        if small { 0 } else { 1 },
+        icon_type,
         0,
         SMTO_BLOCK | SMTO_ABORTIFHUNG,
         ICON_FETCH_TIMEOUT_MS,
         &mut result,
     );
     if result != 0 {
-        return result as HICON;
+        CopyIcon(result as HICON)
+    } else {
+        null_mut()
     }
+}
 
-    let class_icon = GetClassLongW(hwnd, if small { GCL_HICONSM } else { GCL_HICON }) as usize;
+unsafe fn query_class_icon(hwnd: HWND, class_index: i32) -> HICON {
+    let class_icon = GetClassLongPtrW(hwnd, class_index) as usize;
     if class_icon != 0 {
-        class_icon as HICON
+        CopyIcon(class_icon as HICON)
     } else {
         null_mut()
     }
 }
 
 fn compare_tasks(left: &TaskEntry, right: &TaskEntry, sort_column: TaskColumnId, sort_direction: i32) -> Ordering {
+    // 排序的最后兜底键是窗口句柄，保证同值情况下结果稳定，不会每轮刷新都乱跳。
     let ordering = match sort_column {
         TaskColumnId::Name => left.title.to_lowercase().cmp(&right.title.to_lowercase()),
         TaskColumnId::Status => left.is_hung.cmp(&right.is_hung),
@@ -1213,8 +1285,14 @@ unsafe fn widestr_ptr_to_string(ptr: *const u16) -> String {
 }
 
 unsafe fn add_icon(imagelist: HIMAGELIST, icon: HICON, default_icon: HICON) -> usize {
-    let icon_handle = if icon.is_null() { default_icon } else { icon };
+    // 自己复制得到的图标句柄在加入 ImageList 后就可以释放；
+    // 默认图标是共享资源，不应在这里销毁。
+    let uses_default_icon = icon.is_null();
+    let icon_handle = if uses_default_icon { default_icon } else { icon };
     let index = ImageList_ReplaceIcon(imagelist, -1, icon_handle);
+    if !uses_default_icon {
+        DestroyIcon(icon);
+    }
     if index < 0 { 0 } else { index as usize }
 }
 
@@ -1236,6 +1314,7 @@ impl TaskEntry {
 }
 
 fn update_task_entry(task: &mut TaskEntry, worker: &WorkerTaskEntry, pass_count: u64) {
+    // 增量更新只标记真正变化的列，这样详细视图刷新时能减少不必要重绘。
     task.pass_count = pass_count;
 
     if task.winstation != worker.winstation {

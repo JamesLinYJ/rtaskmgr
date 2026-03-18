@@ -1,5 +1,9 @@
 use std::sync::OnceLock;
 
+// 本地化入口模块。
+// 其它模块只通过这里按资源 ID 或文本键取字符串，不必关心当前语言表
+// 实际来自哪个语言文件。
+
 use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
 
 #[path = "localization_terms.rs"]

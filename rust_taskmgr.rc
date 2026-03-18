@@ -1,11 +1,15 @@
+// Win32 资源定义入口。
+// 这里集中声明程序清单、位图、对话框、菜单和版本资源，Rust 侧通过固定资源 ID 与之协作。
 #include "windows.h"
 #include "commctrl.h"
 
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 #pragma code_page(1252)
 
+// 绑定应用清单，控制常用控件版本和 DPI/权限等基础行为。
 1 24 "sysmon.manifest"
 
+// 位图资源主要用于性能页和自绘控件。
 102 BITMAP DISCARDABLE "numbers.bmp"
 103 BITMAP DISCARDABLE "ledlit.bmp"
 104 BITMAP DISCARDABLE "ledunlit.bmp"
@@ -699,4 +703,35 @@ BEGIN
     40099 "Hides the title and menu bars"
     40064 "Restores the Task Manager from its hidden state"
     40065 "Hide the Task Manager when it is minimized"
+END
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 0,1,0,0
+ PRODUCTVERSION 0,1,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS__WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "public\0"
+            VALUE "Comments", "Rust-based Win32 Task Manager for Windows.\0"
+            VALUE "FileDescription", "Windows NT Task Manager (Rust)\0"
+            VALUE "FileVersion", "0.1.0.0\0"
+            VALUE "InternalName", "taskmgr\0"
+            VALUE "LegalCopyright", "GNU General Public License 2.0\0"
+            VALUE "LegalTrademarks", "Windows is a trademark of Microsoft. This project is not affiliated with Microsoft.\0"
+            VALUE "OriginalFilename", "taskmgr.exe\0"
+            VALUE "ProductName", "Windows NT Task Manager (Rust)\0"
+            VALUE "ProductVersion", "0.1.0.0\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
 END

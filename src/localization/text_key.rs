@@ -1,3 +1,6 @@
+//! 本地化文本键定义。
+//! 业务代码只引用这些键，不直接依赖某一种语言的具体字符串。
+
 #[derive(Clone, Copy)]
 pub enum TextKey {
     File,

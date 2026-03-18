@@ -1,5 +1,8 @@
 use std::mem::{size_of, zeroed};
 
+// 界面本地化辅助模块。
+// 这里负责在菜单和对话框资源创建后，按当前语言把可见文本替换成对应翻译。
+
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetDlgItem, GetSubMenu, HMENU, MENUITEMINFOW, MIIM_STRING, SetDlgItemTextW, SetMenuItemInfoW,
@@ -11,6 +14,7 @@ use crate::resource::*;
 use crate::winutil::to_wide_null;
 
 pub unsafe fn localize_dialog(hwnd: HWND, dialog_id: u16) {
+    // 对话框本地化按资源 ID 分发，确保同一个模板在不同语言下仍复用相同控件编号。
     if hwnd.is_null() {
         return;
     }
@@ -95,6 +99,8 @@ pub unsafe fn localize_dialog(hwnd: HWND, dialog_id: u16) {
 }
 
 pub unsafe fn localize_menu(menu: HMENU, resource_id: u16) {
+    // 菜单本地化分两层：
+    // 先替换所有命令项文本，再按资源结构修正各级子菜单标题。
     if menu.is_null() {
         return;
     }
@@ -164,6 +170,8 @@ unsafe fn set_control_text(hwnd: HWND, text_key: TextKey) {
 }
 
 unsafe fn set_submenu(menu: HMENU, path: &[i32], text_key: TextKey) {
+    // `path` 表示一条“第几个子菜单 -> 其下第几个子菜单”的路径，
+    // 这样不同资源结构可以复用同一个小工具函数。
     if path.is_empty() {
         return;
     }
@@ -190,6 +198,7 @@ unsafe fn set_submenu(menu: HMENU, path: &[i32], text_key: TextKey) {
 }
 
 unsafe fn set_menu_by_command(menu: HMENU, command_id: u16, text_key: TextKey) {
+    // 命令项通过 command id 直接定位，适合不同菜单资源里复用的同名命令。
     let mut wide = to_wide_null(text(text_key));
     let mut info = MENUITEMINFOW {
         cbSize: size_of::<MENUITEMINFOW>() as u32,

@@ -1,3 +1,7 @@
+//! 应用主控模块。
+//! 这里负责 Win32 启动、主窗口生命周期、消息循环、菜单与托盘状态，
+//! 并统一协调各个页面的初始化、激活和定时刷新。
+
 use std::env;
 use std::mem::{size_of, transmute, zeroed};
 use std::ptr::{null, null_mut};
@@ -96,6 +100,8 @@ struct GlobalStrings {
 
 #[derive(Default)]
 struct RuntimeStats {
+    // 运行期统计信息会被状态栏、托盘提示和部分页面共享。
+    // 它是页面采样结果与主框架 UI 之间的中转缓存。
     cpu_usage: u8,
     mem_usage_kb: u32,
     mem_limit_kb: u32,
@@ -107,6 +113,7 @@ struct RuntimeStats {
 }
 
 pub struct App {
+    // 主应用状态对象统一持有主窗口、菜单、页面和托盘/定时器相关状态。
     hinstance: HINSTANCE,
     main_hwnd: HWND,
     status_hwnd: HWND,
@@ -130,6 +137,8 @@ pub struct App {
 }
 
 pub fn run() -> i32 {
+    // 整个程序只维护一个全局 `App` 实例。
+    // 入口负责创建它、运行主循环，并在退出时清空全局指针。
     unsafe {
         let hinstance = GetModuleHandleW(null());
         APP_INSTANCE = Some(App::new(hinstance));
@@ -140,6 +149,8 @@ pub fn run() -> i32 {
 }
 
 unsafe fn app() -> &'static mut App {
+    // 主窗口过程和若干全局回调都会回到这里取当前应用状态。
+    // 如果实例不存在，说明程序已经进入不可恢复的关闭阶段，直接终止进程。
     let app_instance = std::ptr::addr_of_mut!(APP_INSTANCE);
     if let Some(app) = (*app_instance).as_mut() {
         app
@@ -154,6 +165,7 @@ unsafe extern "system" fn perf_frame_wndproc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
+    // 性能页里的“框架控件”需要自绘背景，否则图表重绘时容易出现撕裂和闪烁。
     match msg {
         WM_CREATE => {
             let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
@@ -228,6 +240,8 @@ impl App {
     }
 
     unsafe fn run_main(&mut self) -> i32 {
+        // 启动链路按“单实例检查 -> 环境初始化 -> 创建主对话框 -> 进入消息循环”展开。
+        // 这样既能兼容经典 Task Manager 的行为，也便于在失败点提前退出。
         self.acquire_startup_mutex();
         if self.activate_existing_instance() {
             self.release_startup_mutex();
@@ -299,6 +313,7 @@ impl App {
     }
 
     unsafe fn acquire_startup_mutex(&mut self) {
+        // 命名互斥体用于串行化启动窗口，避免两个实例同时完成“是否已有实例”的判断。
         let mutex_name = to_wide_null(STARTUP_MUTEX_NAME);
         self.startup_mutex = CreateMutexW(null_mut(), TRUE, mutex_name.as_ptr());
         if !self.startup_mutex.is_null()
@@ -309,6 +324,7 @@ impl App {
     }
 
     unsafe fn release_startup_mutex(&mut self) {
+        // 一旦主窗口已经创建或确认无需继续启动，就及时释放互斥体，避免阻塞后续实例探测。
         if !self.startup_mutex.is_null() {
             ReleaseMutex(self.startup_mutex);
             CloseHandle(self.startup_mutex);
@@ -317,6 +333,7 @@ impl App {
     }
 
     unsafe fn activate_existing_instance(&self) -> bool {
+        // 与历史版本一致，靠主窗口标题找到已运行实例，并通过自定义消息把它激活到前台。
         let title = load_string(self.hinstance, IDS_APPTITLE);
         if title.is_empty() {
             return false;
@@ -342,6 +359,8 @@ impl App {
     }
 
     unsafe fn task_manager_disabled(&self) -> bool {
+        // 企业策略或系统策略可能禁用 Task Manager。
+        // 这里在真正启动 UI 前读取策略位，并按系统工具习惯弹出阻止提示。
         let policy_key = to_wide_null("Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System");
         let value_name = to_wide_null("DisableTaskMgr");
         let mut key: HKEY = null_mut();
@@ -374,6 +393,7 @@ impl App {
     }
 
     unsafe fn initialize_common_controls(&self) {
+        // 页面里依赖 Tab、ListView、StatusBar 等公共控件类，必须在创建前统一注册。
         let mut classes = INITCOMMONCONTROLSEX {
             dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
             dwICC: ICC_LISTVIEW_CLASSES | ICC_TAB_CLASSES | ICC_BAR_CLASSES,
@@ -382,6 +402,7 @@ impl App {
     }
 
     unsafe fn load_global_resources(&mut self) {
+        // 这些资源会被菜单、状态栏和托盘图标反复使用，启动时一次性加载可以减少分散的 API 调用。
         self.accelerator_table = LoadAcceleratorsW(self.hinstance, make_int_resource(IDR_ACCELERATORS));
         self.strings.app_title = load_string(self.hinstance, IDS_APPTITLE);
         self.strings.fmt_procs = load_string(self.hinstance, IDS_FMTPROCS);
@@ -408,6 +429,8 @@ impl App {
     }
 
     unsafe fn on_init_dialog(&mut self, hwnd: HWND) -> isize {
+        // 主对话框初始化会把“窗口样式、状态栏、标签页、托盘、定时器”全部串起来，
+        // 这也是运行期状态第一次与持久化配置合流的地方。
         self.main_hwnd = hwnd;
         localize_dialog(hwnd, IDD_MAINWND);
 
@@ -539,6 +562,7 @@ impl App {
     }
 
     unsafe fn register_custom_controls(&self) {
+        // 性能页的 frame 控件借用了 Button 类的外观，但需要自定义背景擦除过程来降低闪烁。
         let mut button_class = zeroed::<WNDCLASSW>();
         let button_name = to_wide_null(BUTTON_CLASS);
         if GetClassInfoW(null_mut(), button_name.as_ptr(), &mut button_class) == 0 {
@@ -559,6 +583,8 @@ impl App {
     }
 
     unsafe fn activate_page(&mut self, index: usize) -> bool {
+        // 切页不仅是隐藏/显示子对话框，还要同步菜单、页面选项和尺寸布局。
+        // 如果新页面激活失败，会尽量恢复上一个页面，避免主窗口进入空白状态。
         if index >= self.pages.len() {
             return false;
         }
@@ -608,6 +634,8 @@ impl App {
     }
 
     unsafe fn update_menu_states(&self) {
+        // 菜单状态完全由 `options` 和当前页状态派生，每次切页/改选项后都重新同步，
+        // 避免菜单勾选与真实行为脱节。
         let menu = GetMenu(self.main_hwnd);
         if menu.is_null() {
             return;
@@ -698,6 +726,8 @@ impl App {
     }
 
     unsafe fn size_active_page(&mut self) {
+        // 无标题模式和普通模式的布局入口不同：
+        // 前者让活动页直接占满主窗口客户区，后者则受 Tab 控件内容区约束。
         if self.options.current_page < 0 {
             return;
         }
@@ -807,6 +837,7 @@ impl App {
     }
 
     unsafe fn on_timer(&mut self, hwnd: HWND) {
+        // 按住 Ctrl 时暂停自动刷新，这与经典 Task Manager 的交互保持一致。
         if GetForegroundWindow() == hwnd && GetAsyncKeyState(VK_CONTROL as i32) < 0 {
             return;
         }
@@ -829,6 +860,8 @@ impl App {
     }
 
     unsafe fn refresh_runtime_stats(&mut self) {
+        // 当性能页快照不可用时，主框架自己补采一份轻量级运行时统计，
+        // 用于状态栏和托盘图标，不依赖页面是否处于激活状态。
         let mut idle = zeroed::<FILETIME>();
         let mut kernel = zeroed::<FILETIME>();
         let mut user = zeroed::<FILETIME>();
@@ -914,6 +947,7 @@ impl App {
     }
 
     unsafe fn refresh_tray_icon(&self) {
+        // 托盘图标按 CPU 使用率映射到离散图标序列，行为上尽量贴近经典任务管理器。
         if self.tray_icons.is_empty() {
             return;
         }
@@ -960,6 +994,7 @@ impl App {
     }
 
     unsafe fn on_tray_notification(&mut self, lparam: LPARAM) {
+        // 托盘图标承担“恢复窗口”和“快速菜单”两个入口，所以这里单独处理鼠标消息。
         match lparam as u32 {
             windows_sys::Win32::UI::WindowsAndMessaging::WM_LBUTTONDBLCLK => self.show_running_instance(),
             WM_RBUTTONDOWN => {
@@ -1002,6 +1037,8 @@ impl App {
     }
 
     unsafe fn on_menu_select(&mut self, wparam: WPARAM, lparam: LPARAM) -> isize {
+        // 菜单高亮时，状态栏会临时切到“帮助文本”模式；
+        // 退出菜单跟踪后，再恢复回实时统计栏。
         if self.status_hwnd.is_null() {
             return 0;
         }
@@ -1089,6 +1126,8 @@ impl App {
     }
 
     unsafe fn show_run_dialog(&self) -> bool {
+        // 新建任务对话框复用 shell32 导出的 RunFileDlg，
+        // 这样能得到与系统一致的“运行”体验，而不是自造一个近似实现。
         let shell32_name = to_wide_null("shell32.dll");
         let shell32 = LoadLibraryW(shell32_name.as_ptr());
         if shell32.is_null() {
@@ -1135,6 +1174,8 @@ impl App {
     }
 
     unsafe fn on_command(&mut self, hwnd: HWND, command_id: u16) {
+        // 主命令分发层只负责修改全局选项、切页和把页面专属命令转发到对应子页面。
+        // 真正的进程/任务/用户操作都在各自页面状态对象里完成。
         match command_id {
             IDM_HIDE => {
                 ShowWindow(hwnd, SW_MINIMIZE);
@@ -1294,6 +1335,8 @@ impl App {
     }
 
     unsafe fn record_window_rect(&mut self, hwnd: HWND) {
+        // 只有在初始位置已经应用过之后，后续移动/缩放才应该回写配置，
+        // 否则会把对话框默认位置误记成用户偏好。
         if !self.already_applied_initial_position {
             return;
         }
@@ -1319,6 +1362,7 @@ impl App {
     }
 
     unsafe fn on_find_process(&mut self, thread_id: u32, pid: u32) -> isize {
+        // “转到进程”来自任务页，需要先切到进程页，再尝试把对应进程行选中并滚动到可见区域。
         let tabs_hwnd = GetDlgItem(self.main_hwnd, IDC_TABS);
         if tabs_hwnd.is_null() {
             MessageBeep(0);
@@ -1335,6 +1379,8 @@ impl App {
     }
 
     unsafe fn shutdown(&mut self) {
+        // 关闭顺序按“停定时器 -> 让页面保存状态 -> 销毁页面资源 -> 移除托盘 -> 写配置”执行，
+        // 避免还在刷新的页面访问已经销毁的窗口或句柄。
         KillTimer(self.main_hwnd, 0);
 
         if self.options.current_page >= 0 {
@@ -1357,6 +1403,7 @@ impl App {
 }
 
 unsafe fn adjusted_tab_page_rect(tabs_hwnd: HWND, owner_hwnd: HWND) -> RECT {
+    // Tab 控件的客户区需要通过 `TCM_ADJUSTRECT` 扣掉页签边框后，才能得到真正的页面矩形。
     let mut page_rect = zeroed::<RECT>();
     GetClientRect(tabs_hwnd, &mut page_rect);
     SendMessageW(tabs_hwnd, TCM_ADJUSTRECT, 0, &mut page_rect as *mut _ as LPARAM);
@@ -1379,6 +1426,8 @@ unsafe extern "system" fn main_window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
+    // 主窗口过程只做最薄的一层 Win32 消息路由，
+    // 具体行为统一委托给 `App`，避免消息逻辑散落在全局回调里。
     let application = app();
 
     if msg == WM_SIZE || msg == WM_MOVE {
@@ -1496,6 +1545,7 @@ fn filetime_to_u64(filetime: FILETIME) -> u64 {
 }
 
 unsafe fn process_count() -> u32 {
+    // ToolHelp 快照比逐进程句柄探测更便宜，足够支撑状态栏和托盘里的进程数量统计。
     let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if snapshot == INVALID_HANDLE_VALUE {
         return 0;

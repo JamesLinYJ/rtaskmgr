@@ -1,3 +1,5 @@
+//! 简体中文语言表。
+
 use super::text_key::TextKey;
 use crate::resource::*;
 

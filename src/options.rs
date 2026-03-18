@@ -1,4 +1,8 @@
 use std::mem::{size_of, zeroed};
+
+// 持久化配置模块。
+// 该模块维护与历史 Task Manager 注册表格式兼容的选项结构，并负责默认值、
+// 数据合法性校验以及注册表的读写边界。
 use std::ptr::null_mut;
 
 use windows_sys::Win32::Foundation::{ERROR_SUCCESS, RECT};
@@ -24,6 +28,13 @@ const FLAG_KERNEL_TIMES: u32 = 1 << 3;
 const FLAG_NO_TITLE: u32 = 1 << 4;
 const FLAG_HIDE_WHEN_MIN: u32 = 1 << 5;
 const FLAG_SHOW_16BIT: u32 = 1 << 6;
+const ALL_VALID_FLAGS: u32 = FLAG_MINIMIZE_ON_USE
+    | FLAG_CONFIRMATIONS
+    | FLAG_ALWAYS_ON_TOP
+    | FLAG_KERNEL_TIMES
+    | FLAG_NO_TITLE
+    | FLAG_HIDE_WHEN_MIN
+    | FLAG_SHOW_16BIT;
 
 #[repr(i32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -75,6 +86,7 @@ pub enum ColumnId {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Options {
+    // 该结构体会按二进制整体落盘到注册表，因此字段顺序和类型都需要保持稳定。
     pub cb_size: u32,
     pub timer_interval: u32,
     pub view_mode: i32,
@@ -144,6 +156,7 @@ impl Options {
     }
 
     pub fn load(&mut self, min_width: i32, min_height: i32) -> bool {
+        // 读取失败或数据不合法时，统一回退到默认配置，避免坏配置把程序带崩。
         if modifiers_force_defaults() {
             self.set_default_values(min_width, min_height);
             return false;
@@ -186,6 +199,7 @@ impl Options {
     }
 
     pub fn save(&self) -> Result<(), u32> {
+        // 整个结构体按历史格式整体写入注册表，保持与原版偏好布局兼容。
         unsafe {
             let key_name = to_wide_null(TASKMAN_KEY);
             let value_name = to_wide_null(OPTIONS_KEY);
@@ -282,14 +296,29 @@ impl Options {
     }
 
     fn is_valid(&self) -> bool {
+        // 这里显式校验所有会影响数组索引或窗口状态的字段，
+        // 防止损坏的注册表值在后续刷新路径里触发越界或错误状态。
         let max_width = unsafe { GetSystemMetrics(SM_CXMAXIMIZED) };
         let max_height = unsafe { GetSystemMetrics(SM_CYMAXIMIZED) };
 
-        self.window_rect.left <= max_width
+        self.cb_size == size_of::<Self>() as u32
+            && self.window_rect.left <= self.window_rect.right
+            && self.window_rect.top <= self.window_rect.bottom
+            && self.window_rect.left <= max_width
             && self.window_rect.top <= max_height
             && self.window_rect.right >= 0
             && self.window_rect.bottom >= 0
+            && self.current_page >= -1
             && self.current_page < NUM_PAGES as i32
+            && is_valid_view_mode(self.view_mode)
+            && is_valid_cpu_history_mode(self.cpu_history_mode)
+            && is_valid_update_speed(self.update_speed)
+            && self.flags & !ALL_VALID_FLAGS == 0
+            && self
+                .active_process_columns
+                .iter()
+                .all(|value| *value == -1 || (0..NUM_COLUMN as i32).contains(value))
+            && self.column_widths.iter().all(|value| *value >= -1)
     }
 
     fn set_flag(&mut self, mask: u32, value: bool) {
@@ -307,6 +336,32 @@ fn modifiers_force_defaults() -> bool {
             && GetKeyState(VK_MENU as i32) < 0
             && GetKeyState(VK_CONTROL as i32) < 0
     }
+}
+
+fn is_valid_view_mode(value: i32) -> bool {
+    matches!(
+        value,
+        x if x == ViewMode::LargeIcon as i32
+            || x == ViewMode::SmallIcon as i32
+            || x == ViewMode::Details as i32
+    )
+}
+
+fn is_valid_cpu_history_mode(value: i32) -> bool {
+    matches!(
+        value,
+        x if x == CpuHistoryMode::Sum as i32 || x == CpuHistoryMode::Panes as i32
+    )
+}
+
+fn is_valid_update_speed(value: i32) -> bool {
+    matches!(
+        value,
+        x if x == UpdateSpeed::High as i32
+            || x == UpdateSpeed::Normal as i32
+            || x == UpdateSpeed::Low as i32
+            || x == UpdateSpeed::Paused as i32
+    )
 }
 
 fn screen_reader_enabled() -> bool {

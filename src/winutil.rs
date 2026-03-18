@@ -1,13 +1,17 @@
 use std::ffi::OsStr;
+
+// 跨模块复用的 Win32 工具函数。
+// 这里集中放 UTF-16 转换、菜单裁剪、ListView 子类化、重绘控制以及
+// 一些与指针宽度相关的安全包装逻辑。
 use std::iter;
 use std::mem::zeroed;
 use std::os::windows::ffi::OsStrExt;
-use std::ptr::null_mut;
+use std::ptr::{null, null_mut};
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     CombineRgn, CreateRectRgn, CreateSolidBrush, DeleteObject, FillRgn, HBRUSH, HDC, HRGN,
-    GetSysColor, InvalidateRect, SetRectRgn, COLOR_WINDOW, RGN_DIFF, RGN_OR,
+    GetSysColor, InvalidateRect, SetRectRgn, UpdateWindow, COLOR_WINDOW, RGN_DIFF, RGN_OR,
 };
 use windows_sys::Win32::System::Threading::{IsWow64Process, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows_sys::Win32::UI::Controls::{
@@ -16,13 +20,15 @@ use windows_sys::Win32::UI::Controls::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, DeleteMenu, GetClientRect, GetSystemMetrics, GetWindowLongPtrW, HMENU,
     LoadStringW, SendMessageW, SetWindowLongPtrW, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC,
-    MF_BYCOMMAND, SM_CXEDGE, WM_ERASEBKGND, WM_SYSCOLORCHANGE, DWLP_MSGRESULT,
+    MF_BYCOMMAND, SM_CXEDGE, WM_ERASEBKGND, WM_SETREDRAW, WM_SYSCOLORCHANGE, DWLP_MSGRESULT,
 };
 
 use crate::localization::{localized_string, text, TextKey};
 use crate::resource::{IDM_ALLCPUS, IDM_RUN};
 
 const REST_NORUN: u32 = 0x0000_0001;
+const LVM_SETEXTENDEDLISTVIEWSTYLE: u32 = 0x1036;
+const LVS_EX_DOUBLEBUFFER: usize = 0x0001_0000;
 static mut LIST_VIEW_WNDPROC: isize = 0;
 static mut LIST_VIEW_BRUSH: HBRUSH = null_mut();
 static mut LIST_VIEW_VIEW_RGN: HRGN = null_mut();
@@ -41,6 +47,7 @@ pub fn to_wide_null(text: &str) -> Vec<u16> {
 }
 
 pub unsafe fn load_string(hinstance: HINSTANCE, id: u32) -> String {
+    // 优先走我们自己的语言表覆盖；如果当前语言没提供这条文案，再回退到资源字符串。
     if let Some(text) = localized_string(id) {
         return text.to_string();
     }
@@ -55,6 +62,8 @@ pub unsafe fn load_string(hinstance: HINSTANCE, id: u32) -> String {
 }
 
 pub fn format_resource_string(template: &str, values: &[String]) -> String {
+    // 这里实现的是 Task Manager 旧式资源格式里最常见的 `%d/%u/%s/%%` 子集，
+    // 足够满足状态栏和托盘提示等场景，不必引入完整的 printf 解析器。
     let mut rendered = String::with_capacity(template.len() + values.iter().map(String::len).sum::<usize>());
     let mut chars = template.chars().peekable();
     let mut index = 0usize;
@@ -128,6 +137,8 @@ pub fn hiword(value: usize) -> u16 {
 }
 
 pub unsafe fn sanitize_task_manager_menu(menu: HMENU, processor_count: usize) {
+    // 某些菜单项是否可见由系统策略和 CPU 数量决定。
+    // 这里在每次加载菜单后做一次裁剪，避免资源文件里维护多套变体。
     if menu.is_null() {
         return;
     }
@@ -142,9 +153,17 @@ pub unsafe fn sanitize_task_manager_menu(menu: HMENU, processor_count: usize) {
 }
 
 pub unsafe fn subclass_list_view(hwnd: HWND) {
+    // 统一给列表启用双缓冲和自定义背景擦除逻辑，减少自动刷新时的闪烁。
     if hwnd.is_null() {
         return;
     }
+
+    SendMessageW(
+        hwnd,
+        LVM_SETEXTENDEDLISTVIEWSTYLE,
+        LVS_EX_DOUBLEBUFFER,
+        LVS_EX_DOUBLEBUFFER as isize,
+    );
 
     if get_window_long_ptr_value(hwnd, GWLP_WNDPROC) == list_view_wnd_proc as *const () as usize as isize {
         return;
@@ -161,6 +180,17 @@ pub unsafe fn subclass_list_view(hwnd: HWND) {
     }
 }
 
+pub unsafe fn finish_list_view_update(hwnd: HWND) {
+    // 批量更新结束后统一恢复重绘并触发一次刷新，避免每条消息都导致重绘。
+    if hwnd.is_null() {
+        return;
+    }
+
+    SendMessageW(hwnd, WM_SETREDRAW, 1, 0);
+    InvalidateRect(hwnd, null(), 0);
+    UpdateWindow(hwnd);
+}
+
 pub unsafe fn is_32_bit_process_handle(handle: HANDLE) -> bool {
     if handle.is_null() {
         return false;
@@ -171,6 +201,7 @@ pub unsafe fn is_32_bit_process_handle(handle: HANDLE) -> bool {
 }
 
 pub unsafe fn is_32_bit_process_pid(pid: u32) -> bool {
+    // 只为了查询位数时，打开最低限度的查询句柄即可，减少权限失败的概率。
     let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
     if handle.is_null() {
         return false;
@@ -190,6 +221,7 @@ pub fn append_32_bit_suffix(label: &str, is_32_bit: bool) -> String {
 }
 
 unsafe fn ensure_list_view_paint_state() {
+    // 这些 GDI 对象在所有 ListView 子类间共享，避免每个控件都单独创建/销毁画刷和区域。
     if LIST_VIEW_BRUSH.is_null() {
         LIST_VIEW_BRUSH = CreateSolidBrush(GetSysColor(COLOR_WINDOW));
     }
@@ -206,6 +238,8 @@ unsafe fn set_rect_rgn_indirect(region: HRGN, rect: &RECT) {
 }
 
 unsafe fn list_view_get_view_rgn(hwnd: HWND) {
+    // 这里会把“未选中项的可视区域”合成为一个区域，
+    // 供自定义擦背景时只清理真正需要的空白区域，减少整窗闪烁。
     ensure_list_view_paint_state();
     if LIST_VIEW_VIEW_RGN.is_null() || LIST_VIEW_CLIP_RGN.is_null() {
         return;
@@ -247,6 +281,7 @@ unsafe extern "system" fn list_view_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
+    // 自定义 ListView 窗口过程只接管背景擦除相关消息，其余消息回落给原始过程。
     match msg {
         WM_SYSCOLORCHANGE => {
             if !LIST_VIEW_BRUSH.is_null() {

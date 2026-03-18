@@ -1,3 +1,6 @@
+//! 程序入口文件。
+//! 这里本身不承载业务逻辑，只负责组织模块并把启动流程委托给 `app::run`。
+
 #![windows_subsystem = "windows"]
 
 mod app;
@@ -14,5 +17,6 @@ mod userpage;
 mod winutil;
 
 fn main() {
+    // `app::run` 内部负责 Win32 初始化，并返回最终的进程退出码。
     std::process::exit(app::run());
 }

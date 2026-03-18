@@ -1,9 +1,12 @@
+# 项目构建入口。
+# 这里定义包名、版本、发布构建策略，以及 Win32 API 绑定所需的功能开关。
 [package]
-name = "sysmon"
+name = "taskmgr"
 version = "0.1.0"
 edition = "2021"
 build = "build.rs"
 
+# 发布配置偏向生成体积更小、更接近系统工具风格的可执行文件。
 [profile.release]
 opt-level = "z"
 lto = true
@@ -15,6 +18,7 @@ debug-assertions = false
 incremental = false
 overflow-checks = false
 
+# 仅启用当前项目实际使用到的 Win32 模块，避免无关绑定进入最终产物。
 [dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Globalization",

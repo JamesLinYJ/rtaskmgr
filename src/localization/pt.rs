@@ -1,3 +1,5 @@
+//! 葡萄牙语语言表。
+
 use super::text_key::TextKey;
 use crate::resource::*;
 

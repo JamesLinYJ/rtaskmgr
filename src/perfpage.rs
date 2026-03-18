@@ -1,4 +1,8 @@
 use std::ffi::c_void;
+
+// 性能页实现。
+// 该模块负责采样系统级 CPU/内存指标，并绘制经典任务管理器里的折线图、
+// 数值面板和状态快照。
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 
@@ -116,6 +120,7 @@ pub struct PerformanceSnapshot {
 
 #[derive(Default)]
 pub struct PerformancePageState {
+    // 页面级缓存包含采样结果、图表历史和绘制时会复用的 GDI 资源句柄。
     hinstance: HINSTANCE,
     processor_count: usize,
     cpu_usage: u8,
@@ -160,12 +165,15 @@ impl PerformancePageState {
     }
 
     pub unsafe fn initialize(&mut self, hinstance: HINSTANCE, processor_count: usize) {
+        // 性能页启动时先准备采样缓冲和仪表位图；
+        // 真正依赖窗口尺寸的离屏表面会在布局完成后再创建。
         self.hinstance = hinstance;
         self.ensure_history_capacity(processor_count.max(1));
         self.load_meter_bitmaps();
     }
 
     pub unsafe fn apply_options(&mut self, hwnd_page: HWND, options: &Options, processor_count: usize) {
+        // 配置变化会同时影响图表数量、是否叠加内核时间，以及文字区是否折叠。
         self.ensure_history_capacity(processor_count.max(1));
         self.cpu_history_mode = options.cpu_history_mode;
         self.show_kernel_times = options.kernel_times();
@@ -199,6 +207,7 @@ impl PerformancePageState {
     }
 
     pub unsafe fn timer_event(&mut self, hwnd_page: HWND, main_hwnd: HWND) {
+        // 定时器事件先刷新底层采样，再推动图表滚动与数值文本更新。
         self.refresh_measurements(hwnd_page);
         self.scroll_offset = (self.scroll_offset + 2) % GRAPH_GRID;
 
@@ -258,6 +267,8 @@ impl PerformancePageState {
     }
 
     pub unsafe fn draw_cpu_graph(&self, hdc: HDC, rect: RECT, pane_index: usize) {
+        // CPU 图优先绘制到离屏 DC，再一次性拷回目标 DC，
+        // 这样网格线和曲线更新时不会在前台逐步闪出来。
         if pane_index >= self.cpu_history.len() {
             return;
         }
@@ -355,6 +366,7 @@ impl PerformancePageState {
     }
 
     pub unsafe fn draw_mem_graph(&self, hdc: HDC, rect: RECT) {
+        // 内存历史图复用 CPU 图的绘制策略，只是数据源和颜色不同。
         let width = (rect.right - rect.left).max(1);
         let height = (rect.bottom - rect.top).max(1);
         let use_backbuffer = !self.graph_dc.is_null()
@@ -454,6 +466,8 @@ impl PerformancePageState {
     }
 
     pub unsafe fn size_page(&mut self, hwnd_page: HWND, main_hwnd: HWND) {
+        // 布局逻辑尽量贴近经典 Task Manager：
+        // 先算整体可用高度，再分配图表、仪表和底部统计区的位置。
         if hwnd_page.is_null() {
             return;
         }
@@ -633,6 +647,8 @@ impl PerformancePageState {
     }
 
     fn ensure_history_capacity(&mut self, processor_count: usize) {
+        // 核心数变化时，所有按 CPU 维度分片的历史数组都需要一起重建，
+        // 否则“每核图”和“汇总图”会看到不一致的采样长度。
         if self.processor_count == processor_count
             && self.cpu_history.len() == processor_count
             && self.mem_history.len() == HIST_SIZE
@@ -650,6 +666,7 @@ impl PerformancePageState {
     }
 
     unsafe fn refresh_measurements(&mut self, hwnd_page: HWND) {
+        // 这里集中采集所有性能相关数据，确保一次刷新内各图表看到的是同一时刻的快照。
         if self.processor_count == 0 {
             self.ensure_history_capacity(1);
         }
@@ -659,6 +676,8 @@ impl PerformancePageState {
     }
 
     unsafe fn refresh_cpu_histories(&mut self) {
+        // 内核返回的是累积 CPU 时间，所以这里必须与上一轮做差，
+        // 再换算成本轮使用率和内核时间占比。
         let mut processor_info = vec![SystemProcessorPerformanceInformation::default(); self.processor_count];
         let status = NtQuerySystemInformation(
             SystemInformationClass::ProcessorPerformanceInformation as i32,
@@ -719,6 +738,8 @@ impl PerformancePageState {
     }
 
     unsafe fn refresh_system_info(&mut self, hwnd_page: HWND) {
+        // 系统级内存、Commit、句柄、线程、进程总数都来源于同一份快照，
+        // 统一在这里采样可以保证页面上的数字属于同一个刷新时刻。
         let mut perf = zeroed::<PERFORMANCE_INFORMATION>();
         perf.cb = size_of::<PERFORMANCE_INFORMATION>() as u32;
         if K32GetPerformanceInfo(&mut perf, perf.cb) == 0 {
@@ -772,6 +793,7 @@ impl PerformancePageState {
     }
 
     unsafe fn load_meter_bitmaps(&mut self) {
+        // 条形仪表优先复用资源位图；如果资源已经加载过，就不再重复创建 GDI 对象。
         if !self.strip_lit_bitmap.is_null() {
             return;
         }
@@ -894,6 +916,8 @@ impl PerformancePageState {
     }
 
     unsafe fn recreate_graph_surface(&mut self, hwnd_page: HWND) {
+        // 离屏表面尺寸取当前最大的 CPU / 内存图区域，
+        // 这样单份缓冲就能复用于多个图表控件。
         let mut graph_rect = zeroed::<RECT>();
         let mut mem_rect = zeroed::<RECT>();
         let cpu_graph = self.cpu_graph_hwnd(hwnd_page, 0);
@@ -1019,6 +1043,7 @@ unsafe fn defer_resize(hdwp: HDWP, hwnd: HWND, width: i32, height: i32) -> HDWP 
 }
 
 fn push_history(history: &mut [u8], value: u8) {
+    // 历史值按“最新在前”滚动，绘图时就可以直接从右向左连接。
     if history.is_empty() {
         return;
     }
@@ -1056,6 +1081,7 @@ unsafe fn fill_black(hdc: HDC, rect: &RECT) {
 }
 
 unsafe fn draw_grid_width(hdc: HDC, rect: &RECT, width: i32, scroll_offset: i32) {
+    // 网格会跟着 scroll_offset 横向平移，视觉上形成持续向左滚动的历史时间轴。
     let pen = CreatePen(PS_SOLID, 1, rgb(0, 128, 64));
     if pen.is_null() {
         return;
@@ -1095,6 +1121,8 @@ unsafe fn draw_history_series(
     color: u32,
     stop_on_zero: bool,
 ) {
+    // 同一套折线绘制既服务 CPU 曲线，也服务内存曲线；
+    // `stop_on_zero` 用来阻止内存图在历史尚未填满时画出一条贴底长线。
     if history.is_empty() {
         return;
     }
@@ -1207,6 +1235,7 @@ unsafe fn fill_rect_color(hdc: HDC, rect: &RECT, color: u32) {
 }
 
 fn average_history(history_sets: &[Vec<u8>]) -> Vec<u8> {
+    // “所有 CPU 合并图”不是重新采样，而是把同一时间点上的每核数据做平均。
     let Some(first_history) = history_sets.first() else {
         return Vec::new();
     };

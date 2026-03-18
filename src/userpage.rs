@@ -1,4 +1,8 @@
 use std::collections::HashMap;
+
+// 用户页实现。
+// 这里负责枚举终端服务会话、刷新用户列表，并处理发送消息、断开连接、
+// 注销等会话级操作。
 use std::mem::zeroed;
 use std::ptr::null_mut;
 use std::slice;
@@ -41,8 +45,8 @@ use crate::resource::{
     IDM_LOGOFF, IDM_SENDMESSAGE, IDM_SHOWDOMAINNAMES, IDR_USER_CONTEXT, IDS_TASKMGR,
 };
 use crate::winutil::{
-    get_window_userdata, load_string, loword, make_int_resource, set_window_userdata,
-    subclass_list_view, to_wide_null,
+    finish_list_view_update, get_window_userdata, load_string, loword, make_int_resource,
+    set_window_userdata, subclass_list_view, to_wide_null,
 };
 
 const DEFSPACING_BASE: i32 = 3;
@@ -65,6 +69,7 @@ struct MessageDialogResult {
 
 #[derive(Default)]
 pub struct UserPageState {
+    // 用户页状态对象维护会话列表、当前排序方式以及与上下文菜单相关的选中状态。
     hinstance: isize,
     hwnd: HWND,
     no_title: bool,
@@ -81,6 +86,8 @@ impl UserPageState {
     }
 
     pub unsafe fn initialize(&mut self, hwnd: HWND) {
+        // 用户页初始化时把 ListView 立刻配置好并做首轮会话枚举，
+        // 这样页面第一次切入就已经带着当前在线用户状态。
         self.hinstance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(null_mut()) as isize;
         self.hwnd = hwnd;
         let list = self.list_hwnd();
@@ -162,6 +169,7 @@ impl UserPageState {
         EndDeferWindowPos(hdwp);
     }
     pub unsafe fn handle_notify(&mut self, lparam: isize) -> isize {
+        // 选择变化用于驱动按钮可用性，列点击则触发当前会话列表重新排序。
         let notify = &*(lparam as *const NMLISTVIEW);
         if notify.hdr.idFrom as i32 == IDC_USERLIST {
             if notify.hdr.code == LVN_ITEMCHANGED {
@@ -185,6 +193,7 @@ impl UserPageState {
     }
 
     pub unsafe fn handle_command(&mut self, command_id: u16) -> bool {
+        // 用户页命令都围绕会话管理：发消息、断开、注销、切换显示域名。
         match command_id {
             IDM_SENDMESSAGE => {
                 self.send_message();
@@ -208,6 +217,7 @@ impl UserPageState {
     }
 
     pub unsafe fn show_context_menu(&mut self, x: i32, y: i32) {
+        // 右键菜单只在有选择时弹出，并按当前会话状态动态禁用不合法操作。
         let selected = self.selected_session_ids();
         if selected.is_empty() {
             return;
@@ -234,6 +244,7 @@ impl UserPageState {
     }
 
     unsafe fn configure_columns(&self) {
+        // 用户页列固定，直接按当前语言文本重建整套列表头即可。
         let list = self.list_hwnd();
         if list.is_null() {
             return;
@@ -266,6 +277,8 @@ impl UserPageState {
     }
 
     unsafe fn refresh(&mut self) {
+        // 刷新时先保存上一轮会话映射，再和新枚举结果做比对，
+        // 这样可以知道哪些行真正发生了变化。
         let previous_selection = self.selected_session_id;
         let mut previous_sessions = HashMap::with_capacity(self.sessions.len());
         for session in self.sessions.drain(..) {
@@ -312,7 +325,7 @@ impl UserPageState {
                 } else {
                     client_name
                 },
-                session_name: widestr_ptr_to_string(session.pWinStationName).replace("Console", "Console"),
+                session_name: widestr_ptr_to_string(session.pWinStationName),
                 dirty: true,
             };
             if let Some(previous) = previous_sessions.remove(&entry.session_id) {
@@ -339,6 +352,7 @@ impl UserPageState {
     }
 
     unsafe fn update_listview(&self) {
+        // 用户列表也采用增量同步策略，减少重排带来的闪烁和选择状态丢失。
         let list = self.list_hwnd();
         if list.is_null() {
             return;
@@ -379,7 +393,7 @@ impl UserPageState {
             self.insert_row(list, index, &self.sessions[index]);
         }
 
-        SendMessageW(list, WM_SETREDRAW, 1, 0);
+        finish_list_view_update(list);
     }
 
     unsafe fn insert_row(&self, list: HWND, index: usize, session: &UserSessionEntry) {
@@ -413,6 +427,7 @@ impl UserPageState {
     }
 
     unsafe fn update_row(&self, list: HWND, index: usize, session: &UserSessionEntry) {
+        // 第 1 列是字符串，第 2 列显示 session id，其余列回填状态和客户端信息。
         let row = [
             session.display_name.as_str(),
             "",
@@ -487,8 +502,10 @@ impl UserPageState {
     }
 
     unsafe fn update_ui_state(&self) {
+        // “发送消息”只要有选择就可用；
+        // “断开”则不能对已经断开的会话再次执行。
         let selected = self.selected_session_ids();
-        let mut send_enabled = !selected.is_empty();
+        let send_enabled = !selected.is_empty();
         let mut disconnect_enabled = !selected.is_empty();
         let logoff_enabled = !selected.is_empty();
 
@@ -496,9 +513,6 @@ impl UserPageState {
             if let Some(session) = self.sessions.iter().find(|entry| entry.session_id == *session_id) {
                 if session.status == session_state("Disconnected") {
                     disconnect_enabled = false;
-                }
-                if Some(*session_id) == self.selected_session_id && selected.len() == 1 {
-                    send_enabled = false;
                 }
             }
         }
@@ -518,6 +532,7 @@ impl UserPageState {
     }
 
     unsafe fn selected_session_ids(&self) -> Vec<u32> {
+        // 批量操作都基于当前多选会话列表，因此这里统一把所有选中项提取出来。
         let list = self.list_hwnd();
         if list.is_null() {
             return Vec::new();
@@ -549,7 +564,7 @@ impl UserPageState {
     }
 
     unsafe fn update_menu_state(&self, popup: HMENU, selected: &[u32]) {
-        let mut send_enabled = !selected.is_empty();
+        let send_enabled = !selected.is_empty();
         let mut disconnect_enabled = !selected.is_empty();
         let logoff_enabled = !selected.is_empty();
 
@@ -557,9 +572,6 @@ impl UserPageState {
             if let Some(session) = self.sessions.iter().find(|entry| entry.session_id == *session_id) {
                 if session.status == session_state("Disconnected") {
                     disconnect_enabled = false;
-                }
-                if Some(*session_id) == self.selected_session_id && selected.len() == 1 {
-                    send_enabled = false;
                 }
             }
         }
@@ -598,6 +610,7 @@ impl UserPageState {
     }
 
     unsafe fn send_message(&mut self) {
+        // 发送消息会先弹出输入对话框，再逐个会话调用 WTSSendMessageW。
         let selected = self.selected_session_ids();
         if selected.is_empty() {
             return;
@@ -639,6 +652,7 @@ impl UserPageState {
     }
 
     unsafe fn change_session_state(&mut self, command_id: u16) {
+        // 断开/注销属于高影响操作，先确认，再逐个会话执行，失败时立即报错并停止。
         let selected = self.selected_session_ids();
         if selected.is_empty() {
             return;
@@ -681,6 +695,7 @@ impl UserPageState {
     }
 
     unsafe fn show_command_failure(&self, message: &str) {
+        // 统一附带最后一个 Win32 错误码，方便排查权限或会话状态问题。
         let last_error = GetLastError();
         let body = if last_error == 0 {
             message.to_string()
@@ -713,6 +728,7 @@ unsafe fn window_rect_relative_to_page(hwnd: HWND, page_hwnd: HWND) -> RECT {
     rect
 }
 unsafe fn query_session_string(session_id: u32, info_class: i32) -> String {
+    // 终端服务 API 返回的是系统分配的 UTF-16 缓冲区，需要在复制完字符串后手动释放。
     let mut buffer = null_mut();
     let mut bytes = 0u32;
     if WTSQuerySessionInformationW(
@@ -740,6 +756,7 @@ fn compare_user_sessions(
     sort_column: usize,
     sort_ascending: bool,
 ) -> std::cmp::Ordering {
+    // 用户页排序按当前列切换；字符串列统一转小写比较，保证大小写不影响顺序。
     let ordering = match sort_column {
         1 => left.session_id.cmp(&right.session_id),
         2 => left.status.to_lowercase().cmp(&right.status.to_lowercase()),
@@ -778,6 +795,7 @@ unsafe fn widestr_ptr_to_string(text: *const u16) -> String {
 }
 
 fn session_state_text(state: WTS_CONNECTSTATE_CLASS) -> String {
+    // 会话状态枚举集中映射成可本地化的短文本，供列表和菜单状态共用。
     if state == WTSActive {
         session_state("Active").to_string()
     } else if state == WTSConnected {
@@ -809,6 +827,7 @@ unsafe extern "system" fn message_dialog_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
+    // 发送消息对话框只负责收集标题和正文，并通过窗口用户数据回写结果结构体。
     match msg {
         WM_INITDIALOG => {
             set_window_userdata(hwnd, lparam);
@@ -837,6 +856,7 @@ unsafe extern "system" fn message_dialog_proc(
 }
 
 unsafe fn get_dialog_item_text(hwnd: HWND, control_id: i32) -> String {
+    // 小型输入对话框直接把控件文本读回为 Rust String，便于后续传给 WTS API。
     let control = GetDlgItem(hwnd, control_id);
     if control.is_null() {
         return String::new();

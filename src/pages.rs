@@ -1,6 +1,11 @@
 ﻿use std::ptr::null_mut;
 
 use windows_sys::Win32::Foundation::{GetLastError, HINSTANCE, HWND, LPARAM, WPARAM};
+
+// 页面宿主层。
+// 该模块把资源对话框与各页面状态对象粘合起来，统一处理页面的创建、
+// 激活、焦点切换、菜单切换以及 Win32 消息分发。
+
 use windows_sys::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH};
 use windows_sys::Win32::UI::Controls::DRAWITEMSTRUCT;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
@@ -38,6 +43,8 @@ enum PageFocusTarget {
 }
 
 pub struct DialogPage {
+    // `DialogPage` 是资源对话框与具体页面状态对象之间的适配层。
+    // 不同页面共享同一套激活/隐藏/菜单切换流程，只把真正的业务状态交给子页面实现。
     hinstance: HINSTANCE,
     hwnd: HWND,
     hwnd_tabs: HWND,
@@ -163,6 +170,8 @@ impl DialogPage {
         hwnd_tabs: HWND,
         processor_count: usize,
     ) -> Result<(), u32> {
+        // 页面初始化分成两段：
+        // 先准备纯状态资源，再创建对话框，最后补上依赖真实 HWND 的后置初始化。
         self.hinstance = hinstance;
         self.main_hwnd = main_hwnd;
         self.hwnd_tabs = hwnd_tabs;
@@ -224,6 +233,8 @@ impl DialogPage {
         processor_count: usize,
         current_menu: &mut HMENU,
     ) -> Result<(), u32> {
+        // 激活页面时顺带切换主菜单和焦点目标，
+        // 这样每个页面都能看起来像自己“拥有”一套独立菜单。
         if self.hwnd.is_null() {
             return Err(GetLastError());
         }
@@ -270,6 +281,8 @@ impl DialogPage {
     }
 
     pub unsafe fn apply_options(&mut self, options: &Options, processor_count: usize) {
+        // 宿主层只负责把全局选项广播到实际持有状态的那一页，
+        // 页面内部再决定哪些控件需要重排、重绘或重建列。
         if let Some(perf_state) = self.perf_state.as_mut() {
             perf_state.apply_options(self.hwnd, options, processor_count);
             perf_state.size_page(self.hwnd, self.main_hwnd);
@@ -289,6 +302,7 @@ impl DialogPage {
     }
 
     pub unsafe fn timer_event(&mut self, options: &Options, processor_count: usize) {
+        // 定时刷新同样走统一入口，避免主框架需要知道每个页面各自的刷新细节。
         if let Some(perf_state) = self.perf_state.as_mut() {
             perf_state.apply_options(self.hwnd, options, processor_count);
             perf_state.timer_event(self.hwnd, self.main_hwnd);
@@ -311,6 +325,8 @@ impl DialogPage {
     }
 
     pub unsafe fn deactivate(&mut self, options: &mut Options) {
+        // 页面切走前只保存必要的易失状态，比如进程页列宽；
+        // 其它页面如果没有额外状态，就只需要隐藏窗口。
         if let Some(proc_state) = self.proc_state.as_mut() {
             proc_state.deactivate(options);
         }
@@ -320,6 +336,7 @@ impl DialogPage {
     }
 
     pub unsafe fn destroy(&mut self) {
+        // 页面销毁分为“业务资源销毁”和“窗口销毁”两层，前者有些并不依赖窗口仍然存在。
         if let Some(perf_state) = self.perf_state.as_mut() {
             perf_state.destroy();
         }
@@ -386,6 +403,8 @@ pub fn default_pages() -> [DialogPage; 5] {
 }
 
 unsafe fn page_from_hwnd(hwnd: HWND, lparam: LPARAM) -> *mut DialogPage {
+    // 初次进入对话框过程时，`lparam` 带着页面指针；
+    // 绑定完成后，后续消息都从窗口用户数据中回取同一对象。
     let page = get_window_userdata(hwnd) as *mut DialogPage;
     if !page.is_null() {
         page
@@ -400,6 +419,7 @@ unsafe extern "system" fn dialog_page_proc(
     _wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
+    // 通用页面过程只负责完成对象绑定和最基础的对话框初始化。
     match msg {
         WM_INITDIALOG => {
             let page = lparam as *mut DialogPage;
@@ -419,6 +439,7 @@ unsafe extern "system" fn task_page_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
+    // 各具体页面过程在通用对话框流程之上，补充自己的通知和命令处理。
     let page = page_from_hwnd(hwnd, lparam);
 
     match msg {
@@ -498,6 +519,8 @@ unsafe extern "system" fn proc_page_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
+    // 进程页除了基本的点击/命令转发，还要打开 `WS_CLIPCHILDREN`
+    // 来减轻列表与按钮区域一起重绘时的闪烁。
     let page = page_from_hwnd(hwnd, lparam);
 
     match msg {
@@ -585,6 +608,7 @@ unsafe extern "system" fn performance_page_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
+    // 性能页会处理自绘图表和自绘仪表，因此消息种类比其它页面更丰富。
     let page = page_from_hwnd(hwnd, lparam);
 
     match msg {
@@ -684,6 +708,7 @@ unsafe extern "system" fn network_page_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
+    // 网络页除了普通刷新，还要响应滚动条和图表 owner-draw 消息。
     let page = page_from_hwnd(hwnd, lparam);
 
     match msg {
@@ -767,6 +792,7 @@ unsafe extern "system" fn users_page_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
+    // 用户页的交互主要围绕 ListView 选择变化和上下文菜单操作展开。
     let page = page_from_hwnd(hwnd, lparam);
 
     match msg {

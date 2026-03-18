@@ -1,5 +1,7 @@
 use crate::localization::{text, TextKey};
 
+// 多处复用的术语集中在这里，避免不同页面使用不一致的翻译。
+
 pub fn user_column_titles() -> [&'static str; 4] {
     [
         text(TextKey::User),

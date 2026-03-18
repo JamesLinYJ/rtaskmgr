@@ -1,4 +1,7 @@
 use std::collections::HashMap;
+
+// 网络页实现。
+// 该模块轮询网卡统计信息，维护历史曲线，并同步底部列表与顶部图表区域。
 use std::mem::zeroed;
 use std::ptr::null_mut;
 use std::slice;
@@ -33,7 +36,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::localization::{adapter_state, network_column_titles, network_graph_labels};
 use crate::options::Options;
 use crate::resource::{IDC_GRAPHSCROLLVERT, IDC_NICGRAPH, IDC_NICTOTALS, IDC_NOADAPTERS};
-use crate::winutil::{hiword, loword, subclass_list_view, to_wide_null};
+use crate::winutil::{finish_list_view_update, hiword, loword, subclass_list_view, to_wide_null};
 
 const HIST_SIZE: usize = 2000;
 const GRAPH_GRID: i32 = 12;
@@ -84,6 +87,7 @@ struct NetworkGraphControl {
 
 #[derive(Default)]
 pub struct NetworkPageState {
+    // 网络页状态对象维护网卡采样缓存、图表窗口以及滚动位置。
     hwnd: HWND,
     main_hwnd: HWND,
     hwnd_tabs: HWND,
@@ -102,6 +106,8 @@ impl NetworkPageState {
     }
 
     pub unsafe fn initialize(&mut self, hwnd: HWND, main_hwnd: HWND, hwnd_tabs: HWND) {
+        // 网络页初始化时就先建列并做一次刷新，
+        // 这样页面首次显示时不会先看到空壳列表和空白图表框。
         self.hwnd = hwnd;
         self.main_hwnd = main_hwnd;
         self.hwnd_tabs = hwnd_tabs;
@@ -115,6 +121,7 @@ impl NetworkPageState {
 
 
     pub fn apply_options(&mut self, options: &Options) {
+        // 网络页当前只有无标题布局依赖全局选项，因此这里比较轻量。
         let previous = self.no_title;
         self.no_title = options.no_title();
         if self.hwnd.is_null() || previous == self.no_title {
@@ -131,6 +138,7 @@ impl NetworkPageState {
     }
 
     pub unsafe fn timer_event(&mut self) {
+        // 每轮刷新都先推动网格滚动，再采样并重绘当前可见图表。
         self.scroll_offset = (self.scroll_offset + 2) % GRAPH_GRID;
         self.refresh();
         self.update_graphs();
@@ -150,6 +158,8 @@ impl NetworkPageState {
     }
 
     pub unsafe fn draw_graph(&self, hdc: HDC, rect: RECT, pane_index: usize) {
+        // 每个图表面板都根据当前适配器的历史数据独立绘制，
+        // 但缩放规则保持一致，便于横向比较。
         let adapter_index = pane_index.saturating_add(self.first_visible_adapter());
         let Some(adapter) = self.adapters.get(adapter_index) else {
             return;
@@ -245,6 +255,8 @@ impl NetworkPageState {
     }
 
     pub unsafe fn size_page(&mut self) {
+        // 网络页需要同时布局“多块图表 + 滚动条 + 底部列表”，
+        // 因此会先算出一页能显示多少图，再决定是否出现滚动条。
         if self.hwnd.is_null() {
             return;
         }
@@ -425,6 +437,8 @@ impl NetworkPageState {
     }
 
     unsafe fn refresh(&mut self) {
+        // 网络页刷新会把原始计数器转换为“总量 + 利用率 + 历史曲线”三类数据，
+        // 这样图表和列表可以共享同一份采样结果。
         let raw_adapters = self.collect_adapters();
         let now = Instant::now();
         let elapsed_secs = self
@@ -590,6 +604,7 @@ impl NetworkPageState {
     }
 
     unsafe fn update_listview(&self) {
+        // 列表只在适配器身份变化时替换整行，普通数值更新尽量走原位写回。
         let list = self.list_hwnd();
         if list.is_null() {
             return;
@@ -630,7 +645,7 @@ impl NetworkPageState {
             self.insert_row(list, index, &self.adapters[index]);
         }
 
-        SendMessageW(list, WM_SETREDRAW, 1, 0);
+        finish_list_view_update(list);
     }
 
     unsafe fn insert_row(&self, list: HWND, index: usize, adapter: &NetworkAdapterEntry) {
@@ -763,6 +778,7 @@ impl NetworkPageState {
     }
 
     unsafe fn update_graphs(&self) {
+        // 只重绘当前一页真正可见的图表，避免隐藏面板也跟着刷新。
         for pane_index in 0..self.graphs_per_page {
             let Some(graph) = self.graphs.get(pane_index) else {
                 break;
@@ -773,6 +789,7 @@ impl NetworkPageState {
     }
 
     unsafe fn label_graphs(&mut self) {
+        // 图表标题始终绑定当前可见适配器切片，滚动后要一起更新标题文字。
         let first_visible = self.first_visible_adapter();
         for pane_index in 0..self.graphs_per_page {
             let Some(graph) = self.graphs.get(pane_index) else {
@@ -811,6 +828,7 @@ unsafe fn size_graph(
     def_spacing: i32,
     top_spacing: i32,
 ) -> HDWP {
+    // 单个网络图由“外层 frame + 内层 owner-draw graph”两层控件组成，这里一次性定位它们。
     let graph_width = (rect.right - def_spacing * 2).max(0);
     let graph_height = (rect.bottom - top_spacing - def_spacing).max(0);
 
@@ -868,6 +886,7 @@ unsafe fn hide_graph(mut hdwp: HDWP, graph: &NetworkGraphControl) -> HDWP {
 }
 
 fn graphs_per_page(graph_height: i32, adapter_count: usize) -> usize {
+    // 每页图表数量基于当前可用高度动态决定，但不会低于最小可读高度。
     if graph_height <= 0 || adapter_count == 0 {
         return 0;
     }
@@ -881,6 +900,7 @@ fn graphs_per_page(graph_height: i32, adapter_count: usize) -> usize {
 }
 
 fn push_history(history: &mut [u8], value: u8) {
+    // 与性能页一致，网络历史按“最新样本在前”滚动。
     if history.is_empty() {
         return;
     }
@@ -890,6 +910,7 @@ fn push_history(history: &mut [u8], value: u8) {
 }
 
 fn include_adapter(row: &MIB_IF_ROW2) -> bool {
+    // 经典任务管理器不显示 loopback / tunnel，这里保持相同过滤策略。
     row.Type != IF_TYPE_SOFTWARE_LOOPBACK && row.Type != IF_TYPE_TUNNEL
 }
 
@@ -899,6 +920,7 @@ fn wide_array_to_string(value: &[u16]) -> String {
 }
 
 fn adapter_state_text(oper_status: i32) -> String {
+    // 操作状态来自 IP Helper API 的枚举值，这里映射成 UI 层展示文案。
     if oper_status == IfOperStatusUp {
         adapter_state("Connected").to_string()
     } else {
@@ -915,6 +937,7 @@ fn adapter_state_text(oper_status: i32) -> String {
 }
 
 fn utilization_percent(bytes_per_interval: u64, link_speed_bps: u64, elapsed_secs: f64) -> u8 {
+    // 利用率按“本轮字节数 -> bit/s -> 除以链路速率”计算，并限制在 0-100。
     if bytes_per_interval == 0 || link_speed_bps == 0 || elapsed_secs <= 0.0 {
         return 0;
     }
@@ -926,6 +949,7 @@ fn utilization_percent(bytes_per_interval: u64, link_speed_bps: u64, elapsed_sec
 }
 
 fn format_link_speed(bits_per_second: u64) -> String {
+    // 链路速率采用十进制网络单位显示，更符合网卡/交换机常见标注方式。
     if bits_per_second == 0 {
         return "-".to_string();
     }
@@ -966,6 +990,7 @@ unsafe fn fill_black(hdc: HDC, rect: &RECT) {
 }
 
 unsafe fn draw_scale(hdc: HDC, rect: &RECT, max_scale_value: u32) -> i32 {
+    // 刻度区单独占据左侧一列，返回值是后续真正绘图区域的左边界偏移。
     let top_text = format!("{max_scale_value} %");
     let middle_text = format!("{} %", max_scale_value / 2);
     let bottom_text = "0 %";
@@ -1045,6 +1070,7 @@ unsafe fn measure_graph_text(hdc: HDC, text: &str) -> (i32, i32) {
 }
 
 unsafe fn draw_grid(hdc: HDC, rect: &RECT, scroll_offset: i32, zoom: u32) {
+    // 网格密度会随着 zoom 调整，避免在低利用率场景下曲线长期贴底看不清。
     let pen = CreatePen(PS_SOLID, 1, rgb(0, 128, 64));
     if pen.is_null() {
         return;
@@ -1072,6 +1098,7 @@ unsafe fn draw_grid(hdc: HDC, rect: &RECT, scroll_offset: i32, zoom: u32) {
 }
 
 unsafe fn draw_history(hdc: HDC, rect: &RECT, history: &[u8], color: u32, zoom: u32) {
+    // 三条折线都共用这套绘制函数，只靠颜色区分 total / received / sent。
     if history.is_empty() {
         return;
     }
@@ -1118,6 +1145,7 @@ fn scaled_history_y(rect: &RECT, graph_height: i32, value: u8, zoom: u32) -> i32
 }
 
 fn graph_zoom(scale_max: u8) -> u32 {
+    // 当前量级较小时自动放大坐标，让低流量波动也能在图上看出来。
     match scale_max {
         0 => 100,
         1..=4 => 20,
