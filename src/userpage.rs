@@ -786,8 +786,10 @@ unsafe fn widestr_ptr_to_string(text: *const u16) -> String {
         return String::new();
     }
 
+    // 防止缺失终止符的异常缓冲区触发无界内存读取。
+    const MAX_WIDE_CHARS: usize = 32 * 1024;
     let mut len = 0usize;
-    while *text.add(len) != 0 {
+    while len < MAX_WIDE_CHARS && *text.add(len) != 0 {
         len += 1;
     }
 

@@ -1277,8 +1277,14 @@ fn compare_tasks(left: &TaskEntry, right: &TaskEntry, sort_column: TaskColumnId,
 }
 
 unsafe fn widestr_ptr_to_string(ptr: *const u16) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+
+    // 防止来自 Win32 API 的异常指针在缺失终止符时造成无界读取。
+    const MAX_WIDE_CHARS: usize = 32 * 1024;
     let mut length = 0usize;
-    while *ptr.add(length) != 0 {
+    while length < MAX_WIDE_CHARS && *ptr.add(length) != 0 {
         length += 1;
     }
     String::from_utf16_lossy(std::slice::from_raw_parts(ptr, length))
