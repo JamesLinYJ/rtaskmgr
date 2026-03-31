@@ -39,7 +39,6 @@ pub enum TextKey {
     SelectColumnsTitle,
     SelectProcessColumnsDescription,
     ShowKernelTimes,
-    Show16BitTasks,
     NoTitle,
     RestoreTaskManager,
     EndProcess,

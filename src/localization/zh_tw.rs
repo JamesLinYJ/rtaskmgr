@@ -99,7 +99,6 @@ pub fn text(key: TextKey) -> &'static str {
             "選擇要在工作管理員的「處理程序」頁面上顯示的欄位。"
         }
         TextKey::ShowKernelTimes => "顯示核心時間(&K)",
-        TextKey::Show16BitTasks => "顯示 16 位元工作(&T)",
         TextKey::NoTitle => "無標題(&N)",
         TextKey::RestoreTaskManager => "還原工作管理員(&R)",
         TextKey::EndProcess => "結束處理程序(&E)",

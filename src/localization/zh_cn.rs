@@ -100,7 +100,6 @@ pub fn text(key: TextKey) -> &'static str {
             "选择要在任务管理器的“进程”页上显示的列。"
         }
         TextKey::ShowKernelTimes => "显示内核时间(&K)",
-        TextKey::Show16BitTasks => "显示 16 位任务(&T)",
         TextKey::NoTitle => "无标题(&N)",
         TextKey::RestoreTaskManager => "还原任务管理器(&R)",
         TextKey::EndProcess => "结束进程(&E)",

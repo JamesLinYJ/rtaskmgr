@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Project Files">
+      <UniqueIdentifier>{1D462085-3C40-43DF-8874-5EC1B7AD34A9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Scripts">
+      <UniqueIdentifier>{3596E3C8-B478-411E-A67D-2E984ADCC4A1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{05EEAC89-38DE-45CF-8411-6242A0343259}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Localization">
+      <UniqueIdentifier>{707160F1-0C16-4F90-8523-51029399FDCC}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include=".cargo\config.toml">
+      <Filter>Project Files</Filter>
+    </None>
+    <None Include="Cargo.toml">
+      <Filter>Project Files</Filter>
+    </None>
+    <None Include="Cargo.lock">
+      <Filter>Project Files</Filter>
+    </None>
+    <None Include="build.rs">
+      <Filter>Project Files</Filter>
+    </None>
+    <None Include="rust_taskmgr.rc">
+      <Filter>Project Files</Filter>
+    </None>
+    <None Include="sysmon.manifest">
+      <Filter>Project Files</Filter>
+    </None>
+    <None Include="RUST_MIGRATION.md">
+      <Filter>Project Files</Filter>
+    </None>
+    <None Include="scripts\release-clean.ps1">
+      <Filter>Scripts</Filter>
+    </None>
+    <None Include="src\app.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\localization.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\localization_terms.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\localization_ui.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\main.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\netpage.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\options.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\pages.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\perfpage.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\procpage.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\resource.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\taskpage.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\userpage.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\winutil.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\localization\de.rs">
+      <Filter>Source Files\Localization</Filter>
+    </None>
+    <None Include="src\localization\en_us.rs">
+      <Filter>Source Files\Localization</Filter>
+    </None>
+    <None Include="src\localization\es.rs">
+      <Filter>Source Files\Localization</Filter>
+    </None>
+    <None Include="src\localization\fr.rs">
+      <Filter>Source Files\Localization</Filter>
+    </None>
+    <None Include="src\localization\pt.rs">
+      <Filter>Source Files\Localization</Filter>
+    </None>
+    <None Include="src\localization\ru.rs">
+      <Filter>Source Files\Localization</Filter>
+    </None>
+    <None Include="src\localization\text_key.rs">
+      <Filter>Source Files\Localization</Filter>
+    </None>
+    <None Include="src\localization\zh_cn.rs">
+      <Filter>Source Files\Localization</Filter>
+    </None>
+    <None Include="src\localization\zh_tw.rs">
+      <Filter>Source Files\Localization</Filter>
+    </None>
+  </ItemGroup>
+</Project>

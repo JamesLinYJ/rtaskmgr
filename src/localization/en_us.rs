@@ -105,7 +105,6 @@ pub fn text(key: TextKey) -> &'static str {
             "Select the columns that will appear on the Process page of the Task Manager."
         }
         TextKey::ShowKernelTimes => "Show &Kernel Times",
-        TextKey::Show16BitTasks => "Show 16-bit &tasks",
         TextKey::NoTitle => "&No Title",
         TextKey::RestoreTaskManager => "&Restore Task Manager",
         TextKey::EndProcess => "&End Process",

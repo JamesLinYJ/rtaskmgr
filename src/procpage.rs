@@ -4,14 +4,13 @@ use std::cmp::Ordering;
 // 这里负责采集进程列表、计算每轮刷新之间的增量数据、维护排序状态，
 // 并处理结束进程、调试、设置优先级和亲和性等操作。
 use std::collections::HashMap;
-use std::ffi::CStr;
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 use std::slice;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, FreeLibrary, FILETIME, HANDLE, HINSTANCE, HMODULE, HWND, INVALID_HANDLE_VALUE,
-    LPARAM, POINT, RECT, WPARAM,
+    CloseHandle, FILETIME, HANDLE, HINSTANCE, HWND, INVALID_HANDLE_VALUE, LPARAM, POINT, RECT,
+    WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
 use windows_sys::Win32::Security::{
@@ -23,7 +22,6 @@ use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
-use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows_sys::Win32::System::ProcessStatus::{
     K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX,
 };
@@ -36,14 +34,11 @@ use windows_sys::Win32::System::RemoteDesktop::{
 };
 use windows_sys::Win32::System::Threading::{
     CreateProcessW, GetPriorityClass, GetProcessAffinityMask, GetProcessHandleCount,
-    GetProcessTimes, GetSystemTimes, GetThreadTimes, OpenProcess, OpenProcessToken, OpenThread,
-    SetPriorityClass, SetProcessAffinityMask, TerminateProcess, HIGH_PRIORITY_CLASS,
-    IDLE_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS, PROCESS_INFORMATION, PROCESS_QUERY_INFORMATION,
+    GetProcessTimes, GetSystemTimes, OpenProcess, OpenProcessToken, SetPriorityClass,
+    SetProcessAffinityMask, TerminateProcess, HIGH_PRIORITY_CLASS, IDLE_PRIORITY_CLASS,
+    NORMAL_PRIORITY_CLASS, PROCESS_INFORMATION, PROCESS_QUERY_INFORMATION,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_READ,
-    REALTIME_PRIORITY_CLASS, STARTUPINFOW, THREAD_QUERY_INFORMATION,
-};
-use windows_sys::Win32::System::VirtualDosMachines::{
-    VDMENUMTASKWOWEXPROC, VDMTERMINATETASKINWOWPROC,
+    REALTIME_PRIORITY_CLASS, STARTUPINFOW,
 };
 use windows_sys::Win32::UI::Controls::{
     CheckDlgButton, IsDlgButtonChecked, BST_CHECKED, BST_UNCHECKED, LVCFMT_LEFT, LVCFMT_RIGHT,
@@ -135,7 +130,6 @@ impl ProcessColumn {
 #[derive(Clone, Default)]
 struct PreviousProcSample {
     raw_cpu_time_100ns: u64,
-    display_cpu_time_100ns: u64,
     mem_usage_kb: u32,
     page_faults: u32,
 }
@@ -164,7 +158,6 @@ impl DirtyColumns {
 #[derive(Clone)]
 pub struct ProcEntry {
     pid: u32,
-    real_pid: u32,
     image_name: String,
     is_32_bit: bool,
     user_name: String,
@@ -182,8 +175,6 @@ pub struct ProcEntry {
     priority_class: u32,
     handle_count: u32,
     thread_count: u32,
-    wow_task_handle: u16,
-    is_wow_task: bool,
     pass_count: u64,
     dirty_columns: DirtyColumns,
 }
@@ -232,7 +223,6 @@ pub struct ProcessPageState {
     paused: bool,
     confirmations: bool,
     no_title: bool,
-    show_16bit: bool,
     processor_count: usize,
     debugger_path: Option<String>,
     strings: ProcessStrings,
@@ -255,7 +245,6 @@ impl Default for ProcessPageState {
             paused: false,
             confirmations: true,
             no_title: false,
-            show_16bit: true,
             processor_count: 1,
             debugger_path: None,
             strings: ProcessStrings::default(),
@@ -304,7 +293,6 @@ impl ProcessPageState {
         // 当列配置发生变化时，直接重建列和数据比做局部修补更可靠。
         self.no_title = options.no_title();
         self.confirmations = options.confirmations();
-        self.show_16bit = options.show_16bit();
         self.processor_count = processor_count.max(1);
 
         let desired_columns = columns_from_options(options);
@@ -400,8 +388,7 @@ impl ProcessPageState {
     }
 
     pub unsafe fn show_context_menu(&mut self, x: i32, y: i32) {
-        // 右键菜单会按当前选中进程和系统能力动态裁剪，
-        // 例如 WOW 任务不支持完整优先级/调试操作。
+        // 右键菜单会按当前选中进程和系统能力动态裁剪。
         self.selected_pid = self.current_selected_pid();
         let Some(entry) = self.selected_entry() else {
             return;
@@ -412,7 +399,7 @@ impl ProcessPageState {
             return;
         }
 
-        if self.debugger_path.is_none() || entry.is_wow_task {
+        if self.debugger_path.is_none() {
             EnableMenuItem(
                 popup,
                 IDM_PROC_DEBUG as u32,
@@ -420,22 +407,7 @@ impl ProcessPageState {
             );
         }
 
-        if entry.is_wow_task {
-            for priority_id in [
-                IDM_PROC_REALTIME,
-                IDM_PROC_HIGH,
-                IDM_PROC_NORMAL,
-                IDM_PROC_LOW,
-            ] {
-                EnableMenuItem(
-                    popup,
-                    priority_id as u32,
-                    MF_BYCOMMAND | MF_GRAYED | MF_DISABLED,
-                );
-            }
-        }
-
-        if self.processor_count <= 1 || entry.is_wow_task {
+        if self.processor_count <= 1 {
             RemoveMenu(popup, IDM_AFFINITY as u32, MF_BYCOMMAND);
         }
 
@@ -527,17 +499,8 @@ impl ProcessPageState {
         EndDeferWindowPos(hdwp);
     }
 
-    pub unsafe fn find_process(&mut self, thread_id: u32, pid: u32) -> bool {
-        let target_pid = if thread_id != 0 {
-            self.entries
-                .iter()
-                .find(|entry| entry.is_wow_task && entry.pid == thread_id)
-                .map(|entry| entry.pid)
-                .unwrap_or(pid)
-        } else {
-            pid
-        };
-
+    pub unsafe fn find_process(&mut self, _thread_id: u32, pid: u32) -> bool {
+        let target_pid = pid;
         let Some(index) = self
             .entries
             .iter()
@@ -610,8 +573,7 @@ impl ProcessPageState {
         let system_total = current_system_time();
         let total_delta = system_total.saturating_sub(self.previous_system_time);
         let previous_samples = self.previous_samples.clone();
-        let (entries, next_samples) =
-            collect_process_entries(&previous_samples, total_delta, self.show_16bit);
+        let (entries, next_samples) = collect_process_entries(&previous_samples, total_delta);
         let current_pass = self.pass_count;
 
         for snapshot in entries {
@@ -636,16 +598,8 @@ impl ProcessPageState {
     }
 
     fn resort_entries(&mut self) {
-        let sort_context = build_sort_context(&self.entries);
-        self.entries.sort_by(|left, right| {
-            compare_entries(
-                left,
-                right,
-                &sort_context,
-                self.sort_column,
-                self.sort_direction,
-            )
-        });
+        self.entries
+            .sort_by(|left, right| compare_entries(left, right, self.sort_column, self.sort_direction));
     }
 
     fn remove_stale_entries(&mut self, current_pass: u64) {
@@ -794,22 +748,6 @@ impl ProcessPageState {
             return;
         };
 
-        if entry.is_wow_task
-            && !matches!(
-                column_id,
-                ColumnId::ImageName
-                    | ColumnId::Username
-                    | ColumnId::SessionId
-                    | ColumnId::BasePriority
-                    | ColumnId::ThreadCount
-                    | ColumnId::CpuTime
-                    | ColumnId::Cpu
-            )
-        {
-            *item.pszText = 0;
-            return;
-        }
-
         let text = column_text(entry, column_id, &self.strings);
         copy_text_to_callback_buffer(item.pszText, item.cchTextMax as usize, &text);
     }
@@ -929,54 +867,26 @@ impl ProcessPageState {
             return false;
         }
 
-        if let Some(entry) = self
-            .entries
-            .iter()
-            .find(|entry| entry.pid == pid && entry.is_wow_task)
-        {
-            let Some(vdmdbg) = VdmDbgApi::load() else {
-                self.show_failure_message(&self.strings.cant_kill, 0);
-                return false;
-            };
-            let terminated = if let Some(terminate_task) = vdmdbg.terminate_task {
-                terminate_task(entry.real_pid, entry.wow_task_handle)
-            } else {
-                0
-            };
+        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if handle.is_null() {
+            self.show_failure_message(
+                &self.strings.cant_kill,
+                windows_sys::Win32::Foundation::GetLastError(),
+            );
+            return false;
+        }
 
-            if terminated == 0 {
-                self.show_failure_message(
-                    &self.strings.cant_kill,
-                    windows_sys::Win32::Foundation::GetLastError(),
-                );
-                false
-            } else {
-                self.paused = false;
-                self.refresh_processes();
-                true
-            }
+        let result = TerminateProcess(handle, 1);
+        let error = windows_sys::Win32::Foundation::GetLastError();
+        CloseHandle(handle);
+
+        if result == 0 {
+            self.show_failure_message(&self.strings.cant_kill, error);
+            false
         } else {
-            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-            if handle.is_null() {
-                self.show_failure_message(
-                    &self.strings.cant_kill,
-                    windows_sys::Win32::Foundation::GetLastError(),
-                );
-                return false;
-            }
-
-            let result = TerminateProcess(handle, 1);
-            let error = windows_sys::Win32::Foundation::GetLastError();
-            CloseHandle(handle);
-
-            if result == 0 {
-                self.show_failure_message(&self.strings.cant_kill, error);
-                false
-            } else {
-                self.paused = false;
-                self.refresh_processes();
-                true
-            }
+            self.paused = false;
+            self.refresh_processes();
+            true
         }
     }
 
@@ -1536,77 +1446,41 @@ fn column_id_from_i32(value: i32) -> Option<ColumnId> {
     }
 }
 
-fn build_sort_context(entries: &[ProcEntry]) -> HashMap<u32, ProcEntry> {
-    entries
-        .iter()
-        .cloned()
-        .map(|entry| (entry.pid, entry))
-        .collect()
-}
-
 fn compare_entries(
     left: &ProcEntry,
     right: &ProcEntry,
-    sort_context: &HashMap<u32, ProcEntry>,
     sort_column: ColumnId,
     sort_direction: i32,
 ) -> Ordering {
-    // WOW 16 位任务在排序时借用父进程的一部分上下文，
-    // 这样用户按 CPU/用户名等列排序时，父子条目不会表现得完全割裂。
-    let left_proxy = sort_proxy_entry(left, sort_context);
-    let right_proxy = sort_proxy_entry(right, sort_context);
-
-    if left_proxy.pid == right_proxy.pid {
-        if left.is_wow_task {
-            return if right.is_wow_task {
-                left.image_name
-                    .to_lowercase()
-                    .cmp(&right.image_name.to_lowercase())
-            } else {
-                Ordering::Greater
-            };
-        }
-
-        if right.is_wow_task {
-            return Ordering::Less;
-        }
-    }
-
     let ordering = match sort_column {
-        ColumnId::ImageName => left_proxy
+        ColumnId::ImageName => left
             .image_name
             .to_lowercase()
-            .cmp(&right_proxy.image_name.to_lowercase()),
-        ColumnId::Pid => left_proxy.pid.cmp(&right_proxy.pid),
-        ColumnId::Username => left_proxy
+            .cmp(&right.image_name.to_lowercase()),
+        ColumnId::Pid => left.pid.cmp(&right.pid),
+        ColumnId::Username => left
             .user_name
             .to_lowercase()
-            .cmp(&right_proxy.user_name.to_lowercase()),
-        ColumnId::SessionId => left_proxy.session_id.cmp(&right_proxy.session_id),
-        ColumnId::Cpu => left_proxy.cpu.cmp(&right_proxy.cpu),
-        ColumnId::CpuTime => left_proxy.cpu_time_100ns.cmp(&right_proxy.cpu_time_100ns),
-        ColumnId::MemUsage => left_proxy.mem_usage_kb.cmp(&right_proxy.mem_usage_kb),
-        ColumnId::MemUsageDiff => left_proxy.mem_diff_kb.cmp(&right_proxy.mem_diff_kb),
-        ColumnId::PageFaults => left_proxy.page_faults.cmp(&right_proxy.page_faults),
-        ColumnId::PageFaultsDiff => left_proxy
-            .page_faults_diff
-            .cmp(&right_proxy.page_faults_diff),
-        ColumnId::CommitCharge => left_proxy
-            .commit_charge_kb
-            .cmp(&right_proxy.commit_charge_kb),
-        ColumnId::PagedPool => left_proxy.paged_pool_kb.cmp(&right_proxy.paged_pool_kb),
-        ColumnId::NonPagedPool => left_proxy
-            .nonpaged_pool_kb
-            .cmp(&right_proxy.nonpaged_pool_kb),
+            .cmp(&right.user_name.to_lowercase()),
+        ColumnId::SessionId => left.session_id.cmp(&right.session_id),
+        ColumnId::Cpu => left.cpu.cmp(&right.cpu),
+        ColumnId::CpuTime => left.cpu_time_100ns.cmp(&right.cpu_time_100ns),
+        ColumnId::MemUsage => left.mem_usage_kb.cmp(&right.mem_usage_kb),
+        ColumnId::MemUsageDiff => left.mem_diff_kb.cmp(&right.mem_diff_kb),
+        ColumnId::PageFaults => left.page_faults.cmp(&right.page_faults),
+        ColumnId::PageFaultsDiff => left.page_faults_diff.cmp(&right.page_faults_diff),
+        ColumnId::CommitCharge => left.commit_charge_kb.cmp(&right.commit_charge_kb),
+        ColumnId::PagedPool => left.paged_pool_kb.cmp(&right.paged_pool_kb),
+        ColumnId::NonPagedPool => left.nonpaged_pool_kb.cmp(&right.nonpaged_pool_kb),
         ColumnId::BasePriority => {
-            priority_rank(left_proxy.priority_class).cmp(&priority_rank(right_proxy.priority_class))
+            priority_rank(left.priority_class).cmp(&priority_rank(right.priority_class))
         }
-        ColumnId::HandleCount => left_proxy.handle_count.cmp(&right_proxy.handle_count),
-        ColumnId::ThreadCount => left_proxy.thread_count.cmp(&right_proxy.thread_count),
+        ColumnId::HandleCount => left.handle_count.cmp(&right.handle_count),
+        ColumnId::ThreadCount => left.thread_count.cmp(&right.thread_count),
     };
 
     let ordering = if ordering == Ordering::Equal {
-        let tie_break = left_proxy.pid.cmp(&right_proxy.pid);
+        let tie_break = left.pid.cmp(&right.pid);
         if sort_direction < 0 {
             tie_break.reverse()
         } else {
@@ -1627,17 +1501,6 @@ fn priority_rank(priority_class: u32) -> u8 {
         HIGH_PRIORITY_CLASS => 2,
         NORMAL_PRIORITY_CLASS => 1,
         _ => 0,
-    }
-}
-
-fn sort_proxy_entry<'a>(
-    entry: &'a ProcEntry,
-    sort_context: &'a HashMap<u32, ProcEntry>,
-) -> &'a ProcEntry {
-    if entry.is_wow_task {
-        sort_context.get(&entry.real_pid).unwrap_or(entry)
-    } else {
-        entry
     }
 }
 
@@ -1703,7 +1566,6 @@ fn copy_text_to_callback_buffer(buffer: *mut u16, capacity: usize, text: &str) {
 unsafe fn collect_process_entries(
     previous_samples: &HashMap<u32, PreviousProcSample>,
     total_delta: u64,
-    show_16bit: bool,
 ) -> (Vec<ProcEntry>, HashMap<u32, PreviousProcSample>) {
     // 采样阶段只构造“当下这一轮”的快照，真正的增量计算依赖外部传入的历史样本。
     let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -1724,7 +1586,6 @@ unsafe fn collect_process_entries(
             let image_name = utf16_buffer_to_string(&process_entry.szExeFile);
             let mut entry = ProcEntry {
                 pid,
-                real_pid: pid,
                 image_name,
                 is_32_bit: false,
                 user_name: String::new(),
@@ -1742,8 +1603,6 @@ unsafe fn collect_process_entries(
                 priority_class: NORMAL_PRIORITY_CLASS,
                 handle_count: 0,
                 thread_count,
-                wow_task_handle: 0,
-                is_wow_task: false,
                 pass_count: 0,
                 dirty_columns: DirtyColumns::default(),
             };
@@ -1831,7 +1690,6 @@ unsafe fn collect_process_entries(
                     pid,
                     PreviousProcSample {
                         raw_cpu_time_100ns,
-                        display_cpu_time_100ns: entry.display_cpu_time_100ns,
                         mem_usage_kb: entry.mem_usage_kb,
                         page_faults: entry.page_faults,
                     },
@@ -1850,83 +1708,7 @@ unsafe fn collect_process_entries(
 
     CloseHandle(snapshot);
 
-    if show_16bit {
-        collect_wow_task_entries(
-            previous_samples,
-            total_delta,
-            &mut entries,
-            &mut next_samples,
-        );
-    }
-
     (entries, next_samples)
-}
-
-unsafe fn collect_wow_task_entries(
-    previous_samples: &HashMap<u32, PreviousProcSample>,
-    total_delta: u64,
-    entries: &mut Vec<ProcEntry>,
-    next_samples: &mut HashMap<u32, PreviousProcSample>,
-) {
-    // 16 位任务并不是独立进程，而是挂在 NTVDM 之下。
-    // 这里把父进程 CPU 时间拆分给子任务，并回写父项剩余时间显示。
-    let Some(vdmdbg) = VdmDbgApi::load() else {
-        return;
-    };
-    let Some(enum_tasks) = vdmdbg.enum_tasks else {
-        return;
-    };
-
-    let ntvdm_parent_indexes: Vec<usize> = entries
-        .iter()
-        .enumerate()
-        .filter_map(|(index, entry)| {
-            entry
-                .image_name
-                .eq_ignore_ascii_case("ntvdm.exe")
-                .then_some(index)
-        })
-        .collect();
-
-    for parent_index in ntvdm_parent_indexes {
-        let parent_pid = entries[parent_index].pid;
-        let parent_cpu_time = entries[parent_index].cpu_time_100ns;
-        let (parent_display_cpu_time, parent_cpu_percent) = {
-            let mut context = WowTaskEnumContext {
-                previous_samples,
-                next_samples,
-                total_delta,
-                parent_index,
-                parent_pid,
-                entries,
-                time_left_100ns: parent_cpu_time,
-            };
-            enum_tasks(
-                parent_pid,
-                Some(enum_wow_task_proc),
-                &mut context as *mut WowTaskEnumContext as LPARAM,
-            );
-
-            let previous_parent = previous_samples
-                .get(&parent_pid)
-                .cloned()
-                .unwrap_or_default();
-            let parent_delta = context
-                .time_left_100ns
-                .saturating_sub(previous_parent.display_cpu_time_100ns);
-            (
-                context.time_left_100ns,
-                cpu_percent_from_delta(parent_delta, total_delta),
-            )
-        };
-
-        let parent_entry = &mut entries[parent_index];
-        parent_entry.display_cpu_time_100ns = parent_display_cpu_time;
-        parent_entry.cpu = parent_cpu_percent;
-        if let Some(sample) = next_samples.get_mut(&parent_pid) {
-            sample.display_cpu_time_100ns = parent_entry.display_cpu_time_100ns;
-        }
-    }
 }
 
 unsafe fn current_system_time() -> u64 {
@@ -1944,44 +1726,12 @@ fn filetime_to_u64(filetime: FILETIME) -> u64 {
     ((filetime.dwHighDateTime as u64) << 32) | filetime.dwLowDateTime as u64
 }
 
-unsafe fn read_thread_cpu_time_100ns(thread_id: u32) -> Option<u64> {
-    let thread = OpenThread(THREAD_QUERY_INFORMATION, 0, thread_id);
-    if thread.is_null() {
-        return None;
-    }
-
-    let mut creation = zeroed::<FILETIME>();
-    let mut exit = zeroed::<FILETIME>();
-    let mut kernel = zeroed::<FILETIME>();
-    let mut user = zeroed::<FILETIME>();
-    let ok = GetThreadTimes(thread, &mut creation, &mut exit, &mut kernel, &mut user);
-    CloseHandle(thread);
-
-    if ok == 0 {
-        None
-    } else {
-        Some(filetime_to_u64(kernel).saturating_add(filetime_to_u64(user)))
-    }
-}
-
 fn utf16_buffer_to_string(buffer: &[u16]) -> String {
     let length = buffer
         .iter()
         .position(|value| *value == 0)
         .unwrap_or(buffer.len());
     String::from_utf16_lossy(&buffer[..length])
-}
-
-fn basename_from_path(path: &str) -> &str {
-    path.rsplit(['\\', '/']).next().unwrap_or(path)
-}
-
-fn cstr_ptr_to_string(ptr: *mut i8) -> String {
-    if ptr.is_null() {
-        String::new()
-    } else {
-        unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() }
-    }
 }
 
 unsafe fn load_popup_menu(hinstance: HINSTANCE, resource_id: u16) -> HMENU {
@@ -2014,107 +1764,6 @@ unsafe fn window_rect_relative_to_page(hwnd: HWND, page_hwnd: HWND) -> RECT {
     rect
 }
 
-struct WowTaskEnumContext<'a> {
-    previous_samples: &'a HashMap<u32, PreviousProcSample>,
-    next_samples: &'a mut HashMap<u32, PreviousProcSample>,
-    total_delta: u64,
-    parent_index: usize,
-    parent_pid: u32,
-    entries: &'a mut Vec<ProcEntry>,
-    time_left_100ns: u64,
-}
-
-unsafe extern "system" fn enum_wow_task_proc(
-    thread_id: u32,
-    _module16: u16,
-    task16: u16,
-    _module_name: *mut i8,
-    file_name: *mut i8,
-    lparam: LPARAM,
-) -> i32 {
-    // 枚举回调每次代表一个 16 位任务线程；
-    // 它会把线程级 CPU 时间折算为任务行，并维护父 NTVDM 的剩余时间。
-    let context = &mut *(lparam as *mut WowTaskEnumContext<'_>);
-    let cpu_time_100ns = match read_thread_cpu_time_100ns(thread_id) {
-        Some(value) => value,
-        None => return 0,
-    };
-
-    let previous = context
-        .previous_samples
-        .get(&thread_id)
-        .cloned()
-        .unwrap_or_default();
-    let mut delta_100ns = cpu_time_100ns.saturating_sub(previous.raw_cpu_time_100ns);
-    if delta_100ns > context.time_left_100ns {
-        delta_100ns = context.time_left_100ns;
-    }
-    context.time_left_100ns = context.time_left_100ns.saturating_sub(delta_100ns);
-
-    let image_name = format!("  {}", basename_from_path(&cstr_ptr_to_string(file_name)));
-    let cpu = cpu_percent_from_delta(delta_100ns, context.total_delta);
-    let parent_priority = context.entries[context.parent_index].priority_class;
-    let parent_user_name = context.entries[context.parent_index].user_name.clone();
-    let parent_session_id = context.entries[context.parent_index].session_id;
-
-    if let Some(existing) = context
-        .entries
-        .iter_mut()
-        .find(|entry| entry.is_wow_task && entry.pid == thread_id)
-    {
-        existing.real_pid = context.parent_pid;
-        existing.image_name = image_name;
-        existing.cpu = cpu;
-        existing.cpu_time_100ns = cpu_time_100ns;
-        existing.display_cpu_time_100ns = cpu_time_100ns;
-        existing.priority_class = parent_priority;
-        existing.user_name.clone_from(&parent_user_name);
-        existing.session_id = parent_session_id;
-        existing.handle_count = 0;
-        existing.thread_count = 1;
-        existing.wow_task_handle = task16;
-        existing.pass_count = 0;
-        existing.dirty_columns = DirtyColumns::default();
-    } else {
-        context.entries.push(ProcEntry {
-            pid: thread_id,
-            real_pid: context.parent_pid,
-            image_name,
-            is_32_bit: false,
-            user_name: parent_user_name,
-            session_id: parent_session_id,
-            cpu,
-            cpu_time_100ns,
-            display_cpu_time_100ns: cpu_time_100ns,
-            mem_usage_kb: 0,
-            mem_diff_kb: 0,
-            page_faults: 0,
-            page_faults_diff: 0,
-            commit_charge_kb: 0,
-            paged_pool_kb: 0,
-            nonpaged_pool_kb: 0,
-            priority_class: parent_priority,
-            handle_count: 0,
-            thread_count: 1,
-            wow_task_handle: task16,
-            is_wow_task: true,
-            pass_count: 0,
-            dirty_columns: DirtyColumns::default(),
-        });
-    }
-
-    context.next_samples.insert(
-        thread_id,
-        PreviousProcSample {
-            raw_cpu_time_100ns: cpu_time_100ns,
-            display_cpu_time_100ns: cpu_time_100ns,
-            mem_usage_kb: 0,
-            page_faults: 0,
-        },
-    );
-    0
-}
-
 impl ProcEntry {
     fn with_pass_count(mut self, pass_count: u64) -> Self {
         self.pass_count = pass_count;
@@ -2124,7 +1773,7 @@ impl ProcEntry {
 }
 
 fn same_entry_identity(existing: &ProcEntry, snapshot: &ProcEntry) -> bool {
-    existing.pid == snapshot.pid && existing.is_wow_task == snapshot.is_wow_task
+    existing.pid == snapshot.pid
 }
 
 fn update_process_entry(entry: &mut ProcEntry, snapshot: &ProcEntry, pass_count: u64) {
@@ -2132,9 +1781,6 @@ fn update_process_entry(entry: &mut ProcEntry, snapshot: &ProcEntry, pass_count:
     // 后续 ListView 才能做到“只重绘必要行/列”。
     entry.pass_count = pass_count;
 
-    if entry.real_pid != snapshot.real_pid {
-        entry.real_pid = snapshot.real_pid;
-    }
     if entry.image_name != snapshot.image_name {
         entry.image_name.clone_from(&snapshot.image_name);
         entry.dirty_columns.mark(ColumnId::ImageName);
@@ -2205,62 +1851,5 @@ fn update_process_entry(entry: &mut ProcEntry, snapshot: &ProcEntry, pass_count:
     if entry.thread_count != snapshot.thread_count {
         entry.thread_count = snapshot.thread_count;
         entry.dirty_columns.mark(ColumnId::ThreadCount);
-    }
-
-    entry.wow_task_handle = snapshot.wow_task_handle;
-    entry.is_wow_task = snapshot.is_wow_task;
-}
-
-struct VdmDbgApi {
-    module: HMODULE,
-    enum_tasks: VDMENUMTASKWOWEXPROC,
-    terminate_task: VDMTERMINATETASKINWOWPROC,
-}
-
-impl VdmDbgApi {
-    unsafe fn load() -> Option<Self> {
-        let module_name = to_wide_null("vdmdbg.dll");
-        let module = LoadLibraryW(module_name.as_ptr());
-        if module.is_null() {
-            return None;
-        }
-
-        let enum_tasks = GetProcAddress(module, b"VDMEnumTaskWOWEx\0".as_ptr())
-            .map(|proc_address| {
-                std::mem::transmute::<unsafe extern "system" fn() -> isize, VDMENUMTASKWOWEXPROC>(
-                    proc_address,
-                )
-            })
-            .flatten();
-        let terminate_task =
-            GetProcAddress(module, b"VDMTerminateTaskWOW\0".as_ptr())
-                .map(|proc_address| {
-                    std::mem::transmute::<
-                        unsafe extern "system" fn() -> isize,
-                        VDMTERMINATETASKINWOWPROC,
-                    >(proc_address)
-                })
-                .flatten();
-
-        if enum_tasks.is_none() && terminate_task.is_none() {
-            FreeLibrary(module);
-            None
-        } else {
-            Some(Self {
-                module,
-                enum_tasks,
-                terminate_task,
-            })
-        }
-    }
-}
-
-impl Drop for VdmDbgApi {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.module.is_null() {
-                FreeLibrary(self.module);
-            }
-        }
     }
 }

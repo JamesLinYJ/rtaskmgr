@@ -283,7 +283,6 @@ pub const IDM_KERNELTIMES: u16 = 40056;
 pub const IDM_HIDE: u16 = 40063;
 pub const IDM_RESTORETASKMAN: u16 = 40064;
 pub const IDM_HIDEWHENMIN: u16 = 40065;
-pub const IDM_SHOW16BIT: u16 = 40098;
 pub const IDM_NOTITLE: u16 = 40099;
 pub const IDM_SENDMESSAGE: u16 = 3210;
 pub const IDM_DISCONNECT: u16 = 3212;

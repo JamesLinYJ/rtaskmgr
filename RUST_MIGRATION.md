@@ -44,14 +44,11 @@
   - 列表显示回调现在按行 `lParam` 取 entry，减少刷新期整行文本回写
   - 结束进程、优先级调整、亲和性对话框、AeDebug 调试器启动
   - `Applications -> Go To Process` 已切换到 Rust 进程页定位
-  - `WM_FINDPROC` 现在会先按 WOW 任务线程 ID 查找，再回退到真实 PID
-  - `Show 16-bit Tasks` 会动态加载 `vdmdbg.dll`，枚举 WOW/16-bit 伪进程并支持终止 WOW 任务
-  - WOW 任务右键菜单会按原版禁用 `Debug` / 优先级，移除 `Affinity`
   - `LVN_ITEMCHANGED` 和 `LVN_GETDISPINFOW` 已继续向原版靠拢，只在状态变化时刷新选择状态，并按行 `lParam` 提供显示文本
 - 宿主层菜单行为继续向原版靠拢
   - `IDM_RUN` 改为动态调用 `shell32!RunFileDlg(ordinal 61)`
   - `IDM_HELP` 改为调用 `WinHelpW("taskmgr.hlp", HELP_FINDER)`
-  - `IDM_SHOW16BIT` / CPU 图历史模式 / 任务视图模式切换后立即刷新对应页面
+  - CPU 图历史模式 / 任务视图模式切换后立即刷新对应页面
   - `WM_MENUSELECT` 状态栏菜单帮助文本恢复为按资源 ID 动态加载
   - 置顶窗口的右键临时隐藏/松开恢复逻辑已接回宿主层
   - `Applications` / `Processes` / 托盘弹出菜单都会同步宿主 `in popup` 状态
@@ -59,7 +56,7 @@
 还没完成一比一迁移的部分：
 
 - `taskpage.cpp` 还差少量旧菜单限制策略和个别视图边角
-- `procpage.cpp` 的主体刷新模型已经切成持久 entry / `pass count` / dirty 位，但 WOW 任务更老的历史兼容细节、PID 复用边角和极旧系统分支还没完全照搬
+- `procpage.cpp` 的主体刷新模型已经切成持久 entry / `pass count` / dirty 位，但极旧系统分支和少量边角体验还没完全照搬
 - `perfpage.cpp` 的图例文字和极细的像素级布局对齐还没完全做完
 - 一些老代码里的帮助文件/旧资源可用性，以及更细的托盘边角行为
 
@@ -72,5 +69,5 @@
 后续建议顺序：
 
 1. 继续补齐 `perfpage.cpp` 的图例文字和最后一层像素级布局
-2. 收紧 `procpage.cpp` 的 WOW 细枝末节和错误提示细节
+2. 收紧 `procpage.cpp` 的错误提示细节和剩余边角行为
 3. 回头继续打磨 `taskpage.cpp` 的剩余菜单/视图边角

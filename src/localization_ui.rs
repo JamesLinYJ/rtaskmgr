@@ -239,7 +239,6 @@ const MENU_TEXTS: &[(u16, TextKey)] = &[
     (IDM_AFFINITY, TextKey::SetAffinity),
     (IDM_KERNELTIMES, TextKey::ShowKernelTimes),
     (IDM_HIDEWHENMIN, TextKey::HideWhenMinimized),
-    (IDM_SHOW16BIT, TextKey::Show16BitTasks),
     (IDM_NOTITLE, TextKey::NoTitle),
     (IDM_SENDMESSAGE, TextKey::SendMessage),
     (IDM_DISCONNECT, TextKey::Disconnect),

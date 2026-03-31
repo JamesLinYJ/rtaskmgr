@@ -27,14 +27,12 @@ const FLAG_ALWAYS_ON_TOP: u32 = 1 << 2;
 const FLAG_KERNEL_TIMES: u32 = 1 << 3;
 const FLAG_NO_TITLE: u32 = 1 << 4;
 const FLAG_HIDE_WHEN_MIN: u32 = 1 << 5;
-const FLAG_SHOW_16BIT: u32 = 1 << 6;
 const ALL_VALID_FLAGS: u32 = FLAG_MINIMIZE_ON_USE
     | FLAG_CONFIRMATIONS
     | FLAG_ALWAYS_ON_TOP
     | FLAG_KERNEL_TIMES
     | FLAG_NO_TITLE
-    | FLAG_HIDE_WHEN_MIN
-    | FLAG_SHOW_16BIT;
+    | FLAG_HIDE_WHEN_MIN;
 
 #[repr(i32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -126,8 +124,6 @@ impl Default for Options {
         options.set_minimize_on_use(true);
         options.set_confirmations(true);
         options.set_always_on_top(true);
-        options.set_show_16bit(true);
-
         options.active_process_columns[0] = ColumnId::ImageName as i32;
         options.active_process_columns[1] = ColumnId::Username as i32;
         options.active_process_columns[2] = ColumnId::SessionId as i32;
@@ -285,14 +281,6 @@ impl Options {
 
     pub fn set_hide_when_minimized(&mut self, value: bool) {
         self.set_flag(FLAG_HIDE_WHEN_MIN, value);
-    }
-
-    pub fn show_16bit(&self) -> bool {
-        self.flags & FLAG_SHOW_16BIT != 0
-    }
-
-    pub fn set_show_16bit(&mut self, value: bool) {
-        self.set_flag(FLAG_SHOW_16BIT, value);
     }
 
     fn is_valid(&self) -> bool {

@@ -671,7 +671,6 @@ impl App {
         self.check_menu(menu, IDM_KERNELTIMES, self.options.kernel_times());
         self.check_menu(menu, IDM_NOTITLE, self.options.no_title());
         self.check_menu(menu, IDM_HIDEWHENMIN, self.options.hide_when_minimized());
-        self.check_menu(menu, IDM_SHOW16BIT, self.options.show_16bit());
         if self.options.current_page == USER_PAGE as i32 {
             self.check_menu(
                 menu,
@@ -713,11 +712,6 @@ impl App {
     unsafe fn refresh_task_page(&mut self) {
         self.pages[TASK_PAGE].apply_options(&self.options, self.stats.processor_count as usize);
         self.pages[TASK_PAGE].timer_event(&self.options, self.stats.processor_count as usize);
-    }
-
-    unsafe fn refresh_process_page(&mut self) {
-        self.pages[PROC_PAGE].apply_options(&self.options, self.stats.processor_count as usize);
-        self.pages[PROC_PAGE].timer_event(&self.options, self.stats.processor_count as usize);
     }
 
     unsafe fn refresh_performance_page(&mut self) {
@@ -1227,11 +1221,6 @@ impl App {
                 self.apply_options_to_pages();
                 self.update_menu_states();
                 self.size_active_page();
-            }
-            IDM_SHOW16BIT => {
-                self.options.set_show_16bit(!self.options.show_16bit());
-                self.update_menu_states();
-                self.refresh_process_page();
             }
             IDM_KERNELTIMES => {
                 self.options.set_kernel_times(!self.options.kernel_times());

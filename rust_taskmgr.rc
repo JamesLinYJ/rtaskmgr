@@ -465,7 +465,6 @@ BEGIN
         MENUITEM "&Minimize On Use", 40007, CHECKED
         MENUITEM "&Confirmations", 40026, CHECKED
         MENUITEM "&Hide When Minimized", 40065, CHECKED
-        MENUITEM "&Show 16-bit tasks", 40098, CHECKED
     END
     POPUP "&View"
     BEGIN
@@ -699,7 +698,6 @@ BEGIN
     21002 "WinStation"
     21003 "Desktop"
     3001 "Users"
-    40098 "Shows 16-bit Windows tasks under the associated ntvdm.exe"
     40099 "Hides the title and menu bars"
     40064 "Restores the Task Manager from its hidden state"
     40065 "Hide the Task Manager when it is minimized"

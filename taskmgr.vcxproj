@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{04647858-9872-4389-AE92-912D66AB14BD}</ProjectGuid>
+    <Keyword>MakeFileProj</Keyword>
+    <RootNamespace>taskmgr</RootNamespace>
+    <ProjectName>taskmgr</ProjectName>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <PropertyGroup Label="UserMacros" />
+
+  <PropertyGroup>
+    <ProjectDir Condition="'$(ProjectDir)' == ''">.\</ProjectDir>
+    <OutDir>$(ProjectDir)target\vs\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)target\vs\$(Configuration)\obj\</IntDir>
+    <NMakeIncludeSearchPath>$(ProjectDir)src;$(ProjectDir).cargo</NMakeIncludeSearchPath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <NMakeBuildCommandLine>cargo build</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>cmd /c cargo clean &amp;&amp; cargo build</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>cargo clean</NMakeCleanCommandLine>
+    <NMakeOutput>$(ProjectDir)target\x86_64-pc-windows-msvc\debug\taskmgr.exe</NMakeOutput>
+    <LocalDebuggerCommand>$(ProjectDir)target\x86_64-pc-windows-msvc\debug\taskmgr.exe</LocalDebuggerCommand>
+    <LocalDebuggerWorkingDirectory>$(ProjectDir)</LocalDebuggerWorkingDirectory>
+    <LocalDebuggerDebuggerType>NativeOnly</LocalDebuggerDebuggerType>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <NMakeBuildCommandLine>cargo build --release</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>cmd /c cargo clean &amp;&amp; cargo build --release</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>cargo clean</NMakeCleanCommandLine>
+    <NMakeOutput>$(ProjectDir)target\x86_64-pc-windows-msvc\release\taskmgr.exe</NMakeOutput>
+    <LocalDebuggerCommand>$(ProjectDir)target\x86_64-pc-windows-msvc\release\taskmgr.exe</LocalDebuggerCommand>
+    <LocalDebuggerWorkingDirectory>$(ProjectDir)</LocalDebuggerWorkingDirectory>
+    <LocalDebuggerDebuggerType>NativeOnly</LocalDebuggerDebuggerType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include=".cargo\config.toml" />
+    <None Include="Cargo.toml" />
+    <None Include="Cargo.lock" />
+    <None Include="build.rs" />
+    <None Include="rust_taskmgr.rc" />
+    <None Include="sysmon.manifest" />
+    <None Include="RUST_MIGRATION.md" />
+    <None Include="scripts\release-clean.ps1" />
+    <None Include="src\app.rs" />
+    <None Include="src\localization.rs" />
+    <None Include="src\localization_terms.rs" />
+    <None Include="src\localization_ui.rs" />
+    <None Include="src\main.rs" />
+    <None Include="src\netpage.rs" />
+    <None Include="src\options.rs" />
+    <None Include="src\pages.rs" />
+    <None Include="src\perfpage.rs" />
+    <None Include="src\procpage.rs" />
+    <None Include="src\resource.rs" />
+    <None Include="src\taskpage.rs" />
+    <None Include="src\userpage.rs" />
+    <None Include="src\winutil.rs" />
+    <None Include="src\localization\de.rs" />
+    <None Include="src\localization\en_us.rs" />
+    <None Include="src\localization\es.rs" />
+    <None Include="src\localization\fr.rs" />
+    <None Include="src\localization\pt.rs" />
+    <None Include="src\localization\ru.rs" />
+    <None Include="src\localization\text_key.rs" />
+    <None Include="src\localization\zh_cn.rs" />
+    <None Include="src\localization\zh_tw.rs" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

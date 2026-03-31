@@ -106,7 +106,6 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::OneGraphAllCpus => "Un graphique, &tous les CPU",
         TextKey::OneGraphPerCpu => "Un graphique &par CPU",
         TextKey::ShowKernelTimes => "Afficher les temps &noyau",
-        TextKey::Show16BitTasks => "Afficher les tâches &16 bits",
         TextKey::NoTitle => "&Sans titre",
         TextKey::RestoreTaskManager => "&Restaurer le Gestionnaire des tâches",
         TextKey::SwitchTo => "&Basculer vers",
