@@ -10,61 +10,67 @@ use std::ptr::{null, null_mut};
 use std::slice;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, FILETIME, FreeLibrary, HANDLE, HINSTANCE, HMODULE, HWND, INVALID_HANDLE_VALUE, LPARAM,
-    POINT, RECT, WPARAM,
+    CloseHandle, FreeLibrary, FILETIME, HANDLE, HINSTANCE, HMODULE, HWND, INVALID_HANDLE_VALUE,
+    LPARAM, POINT, RECT, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
+use windows_sys::Win32::Security::{
+    GetTokenInformation, IsWellKnownSid, LookupAccountSidW, TokenSessionId, TokenUser,
+    WinLocalServiceSid, WinLocalSystemSid, WinNetworkServiceSid, SID_NAME_USE, TOKEN_QUERY,
+    TOKEN_USER,
+};
 use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
-use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
-use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX};
+use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+use windows_sys::Win32::System::ProcessStatus::{
+    K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX,
+};
 use windows_sys::Win32::System::Registry::{
     RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ,
-};
-use windows_sys::Win32::Security::{
-    GetTokenInformation, IsWellKnownSid, LookupAccountSidW, SID_NAME_USE, TOKEN_QUERY, TOKEN_USER,
-    TokenSessionId, TokenUser, WinLocalServiceSid, WinLocalSystemSid, WinNetworkServiceSid,
+    REG_EXPAND_SZ, REG_SZ,
 };
 use windows_sys::Win32::System::RemoteDesktop::{
     WTSEnumerateProcessesW, WTSFreeMemory, WTS_CURRENT_SERVER_HANDLE, WTS_PROCESS_INFOW,
 };
 use windows_sys::Win32::System::Threading::{
     CreateProcessW, GetPriorityClass, GetProcessAffinityMask, GetProcessHandleCount,
-    GetProcessTimes, GetSystemTimes, GetThreadTimes, OpenProcess, OpenProcessToken, OpenThread, SetPriorityClass,
-    SetProcessAffinityMask, TerminateProcess, HIGH_PRIORITY_CLASS, IDLE_PRIORITY_CLASS,
-    NORMAL_PRIORITY_CLASS, PROCESS_INFORMATION, PROCESS_QUERY_INFORMATION,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_INFORMATION, PROCESS_TERMINATE,
-    PROCESS_VM_READ, REALTIME_PRIORITY_CLASS, STARTUPINFOW, THREAD_QUERY_INFORMATION,
+    GetProcessTimes, GetSystemTimes, GetThreadTimes, OpenProcess, OpenProcessToken, OpenThread,
+    SetPriorityClass, SetProcessAffinityMask, TerminateProcess, HIGH_PRIORITY_CLASS,
+    IDLE_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS, PROCESS_INFORMATION, PROCESS_QUERY_INFORMATION,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_READ,
+    REALTIME_PRIORITY_CLASS, STARTUPINFOW, THREAD_QUERY_INFORMATION,
 };
-use windows_sys::Win32::System::VirtualDosMachines::{VDMENUMTASKWOWEXPROC, VDMTERMINATETASKINWOWPROC};
+use windows_sys::Win32::System::VirtualDosMachines::{
+    VDMENUMTASKWOWEXPROC, VDMTERMINATETASKINWOWPROC,
+};
 use windows_sys::Win32::UI::Controls::{
     CheckDlgButton, IsDlgButtonChecked, BST_CHECKED, BST_UNCHECKED, LVCFMT_LEFT, LVCFMT_RIGHT,
     LVCF_FMT, LVCF_SUBITEM, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_PARAM, LVIF_STATE, LVIF_TEXT,
-    LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVN_COLUMNCLICK, LVN_GETDISPINFOW, LVN_ITEMCHANGED,
-    LVNI_SELECTED, NMHDR, NMLVDISPINFOW,
-    LVM_DELETEALLITEMS, LVM_DELETECOLUMN, LVM_DELETEITEM, LVM_ENSUREVISIBLE, LVM_GETCOLUMNWIDTH,
-    LVM_GETITEMCOUNT, LVM_GETITEMW, LVM_GETNEXTITEM, LVM_INSERTCOLUMNW, LVM_INSERTITEMW,
-    LVM_REDRAWITEMS, LVM_SETITEMSTATE, LVM_SETITEMW, LVS_SHOWSELALWAYS, NMLISTVIEW,
+    LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVM_DELETEALLITEMS, LVM_DELETECOLUMN, LVM_DELETEITEM,
+    LVM_ENSUREVISIBLE, LVM_GETCOLUMNWIDTH, LVM_GETITEMCOUNT, LVM_GETITEMW, LVM_GETNEXTITEM,
+    LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_REDRAWITEMS, LVM_SETITEMSTATE, LVM_SETITEMW,
+    LVNI_SELECTED, LVN_COLUMNCLICK, LVN_GETDISPINFOW, LVN_ITEMCHANGED, LVS_SHOWSELALWAYS, NMHDR,
+    NMLISTVIEW, NMLVDISPINFOW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BeginDeferWindowPos, CheckMenuRadioItem, DeferWindowPos, DialogBoxParamW, DestroyMenu,
+    BeginDeferWindowPos, CheckMenuRadioItem, DeferWindowPos, DestroyMenu, DialogBoxParamW,
     EnableMenuItem, EndDeferWindowPos, EndDialog, GetClientRect, GetCursorPos, GetDlgItem,
     GetSubMenu, GetWindowLongW, LoadMenuW, MessageBoxW, RemoveMenu, SendMessageW, SetWindowLongW,
-    GWL_STYLE, HMENU, IDCANCEL, IDOK, IDYES, MB_ICONERROR, MB_ICONEXCLAMATION,
+    TrackPopupMenuEx, GWL_STYLE, HMENU, IDCANCEL, IDOK, IDYES, MB_ICONERROR, MB_ICONEXCLAMATION,
     MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_DISABLED, MF_GRAYED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, TPM_RETURNCMD, TrackPopupMenuEx, WM_COMMAND,
-    WM_ENABLE, WM_INITDIALOG, WM_SETREDRAW,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, TPM_RETURNCMD, WM_COMMAND, WM_ENABLE, WM_INITDIALOG,
+    WM_SETREDRAW,
 };
 
+use crate::localization::{localize_dialog, localize_menu};
 use crate::options::Options;
 use crate::options::{ColumnId, UpdateSpeed};
-use crate::localization::{localize_dialog, localize_menu};
 use crate::resource::*;
 use crate::winutil::{
-    append_32_bit_suffix, get_window_userdata, is_32_bit_process_handle, load_string, loword,
-    make_int_resource, finish_list_view_update, sanitize_task_manager_menu, set_window_userdata,
+    append_32_bit_suffix, finish_list_view_update, get_window_userdata, is_32_bit_process_handle,
+    load_string, loword, make_int_resource, sanitize_task_manager_menu, set_window_userdata,
     subclass_list_view, to_wide_null,
 };
 
@@ -284,7 +290,11 @@ impl ProcessPageState {
         let list_hwnd = self.list_hwnd();
         subclass_list_view(list_hwnd);
         let current_style = GetWindowLongW(list_hwnd, GWL_STYLE) as u32;
-        SetWindowLongW(list_hwnd, GWL_STYLE, (current_style | LVS_SHOWSELALWAYS) as i32);
+        SetWindowLongW(
+            list_hwnd,
+            GWL_STYLE,
+            (current_style | LVS_SHOWSELALWAYS) as i32,
+        );
         self.update_ui_state();
         Ok(())
     }
@@ -411,7 +421,12 @@ impl ProcessPageState {
         }
 
         if entry.is_wow_task {
-            for priority_id in [IDM_PROC_REALTIME, IDM_PROC_HIGH, IDM_PROC_NORMAL, IDM_PROC_LOW] {
+            for priority_id in [
+                IDM_PROC_REALTIME,
+                IDM_PROC_HIGH,
+                IDM_PROC_NORMAL,
+                IDM_PROC_LOW,
+            ] {
                 EnableMenuItem(
                     popup,
                     priority_id as u32,
@@ -523,7 +538,11 @@ impl ProcessPageState {
             pid
         };
 
-        let Some(index) = self.entries.iter().position(|entry| entry.pid == target_pid) else {
+        let Some(index) = self
+            .entries
+            .iter()
+            .position(|entry| entry.pid == target_pid)
+        else {
             return false;
         };
 
@@ -657,7 +676,13 @@ impl ProcessPageState {
                 iItem: index as i32,
                 ..zeroed()
             };
-            let current_pid = if SendMessageW(list_hwnd, LVM_GETITEMW, 0, &mut current_item as *mut _ as LPARAM) != 0 {
+            let current_pid = if SendMessageW(
+                list_hwnd,
+                LVM_GETITEMW,
+                0,
+                &mut current_item as *mut _ as LPARAM,
+            ) != 0
+            {
                 Some(current_item.lParam as u32)
             } else {
                 None
@@ -722,7 +747,13 @@ impl ProcessPageState {
         SendMessageW(list_hwnd, LVM_INSERTITEMW, 0, &mut item as *mut _ as LPARAM);
     }
 
-    unsafe fn replace_row(&self, list_hwnd: HWND, index: usize, entry: &ProcEntry, item_state: u32) {
+    unsafe fn replace_row(
+        &self,
+        list_hwnd: HWND,
+        index: usize,
+        entry: &ProcEntry,
+        item_state: u32,
+    ) {
         let mut item = LVITEMW {
             mask: LVIF_TEXT | LVIF_PARAM | LVIF_STATE,
             iItem: index as i32,
@@ -739,7 +770,11 @@ impl ProcessPageState {
     }
 
     unsafe fn fill_display_info(&self, item: &mut LVITEMW) {
-        if (item.mask & LVIF_TEXT) == 0 || item.iItem < 0 || item.pszText.is_null() || item.cchTextMax <= 0 {
+        if (item.mask & LVIF_TEXT) == 0
+            || item.iItem < 0
+            || item.pszText.is_null()
+            || item.cchTextMax <= 0
+        {
             return;
         }
 
@@ -829,7 +864,12 @@ impl ProcessPageState {
 
     unsafe fn current_selected_pid(&self) -> Option<u32> {
         let list_hwnd = self.list_hwnd();
-        let index = SendMessageW(list_hwnd, LVM_GETNEXTITEM, usize::MAX, LVNI_SELECTED as LPARAM) as i32;
+        let index = SendMessageW(
+            list_hwnd,
+            LVM_GETNEXTITEM,
+            usize::MAX,
+            LVNI_SELECTED as LPARAM,
+        ) as i32;
         if index < 0 {
             return None;
         }
@@ -889,7 +929,11 @@ impl ProcessPageState {
             return false;
         }
 
-        if let Some(entry) = self.entries.iter().find(|entry| entry.pid == pid && entry.is_wow_task) {
+        if let Some(entry) = self
+            .entries
+            .iter()
+            .find(|entry| entry.pid == pid && entry.is_wow_task)
+        {
             let Some(vdmdbg) = VdmDbgApi::load() else {
                 self.show_failure_message(&self.strings.cant_kill, 0);
                 return false;
@@ -901,7 +945,10 @@ impl ProcessPageState {
             };
 
             if terminated == 0 {
-                self.show_failure_message(&self.strings.cant_kill, windows_sys::Win32::Foundation::GetLastError());
+                self.show_failure_message(
+                    &self.strings.cant_kill,
+                    windows_sys::Win32::Foundation::GetLastError(),
+                );
                 false
             } else {
                 self.paused = false;
@@ -909,24 +956,27 @@ impl ProcessPageState {
                 true
             }
         } else {
-        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-        if handle.is_null() {
-            self.show_failure_message(&self.strings.cant_kill, windows_sys::Win32::Foundation::GetLastError());
-            return false;
-        }
+            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if handle.is_null() {
+                self.show_failure_message(
+                    &self.strings.cant_kill,
+                    windows_sys::Win32::Foundation::GetLastError(),
+                );
+                return false;
+            }
 
-        let result = TerminateProcess(handle, 1);
-        let error = windows_sys::Win32::Foundation::GetLastError();
-        CloseHandle(handle);
+            let result = TerminateProcess(handle, 1);
+            let error = windows_sys::Win32::Foundation::GetLastError();
+            CloseHandle(handle);
 
-        if result == 0 {
-            self.show_failure_message(&self.strings.cant_kill, error);
-            false
-        } else {
-            self.paused = false;
-            self.refresh_processes();
-            true
-        }
+            if result == 0 {
+                self.show_failure_message(&self.strings.cant_kill, error);
+                false
+            } else {
+                self.paused = false;
+                self.refresh_processes();
+                true
+            }
         }
     }
 
@@ -940,7 +990,7 @@ impl ProcessPageState {
             return false;
         }
 
-        let command_line = format!("{debugger_path} -p {pid}");
+        let command_line = format!("{} -p {pid}", quote_command_line_arg(debugger_path));
         let mut command_line_wide = to_wide_null(&command_line);
         let mut startup_info = STARTUPINFOW {
             cb: size_of::<STARTUPINFOW>() as u32,
@@ -962,7 +1012,10 @@ impl ProcessPageState {
         );
 
         if created == 0 {
-            self.show_failure_message(&self.strings.cant_debug, windows_sys::Win32::Foundation::GetLastError());
+            self.show_failure_message(
+                &self.strings.cant_debug,
+                windows_sys::Win32::Foundation::GetLastError(),
+            );
             false
         } else {
             CloseHandle(process_info.hThread);
@@ -1160,12 +1213,7 @@ unsafe extern "system" fn affinity_dialog_proc(
                 if context.process_mask == 0 {
                     let title_wide = to_wide_null(&page.strings.invalid_option);
                     let body_wide = to_wide_null(&page.strings.no_affinity_mask);
-                    MessageBoxW(
-                        hwnd,
-                        body_wide.as_ptr(),
-                        title_wide.as_ptr(),
-                        MB_ICONERROR,
-                    );
+                    MessageBoxW(hwnd, body_wide.as_ptr(), title_wide.as_ptr(), MB_ICONERROR);
                     1
                 } else {
                     EndDialog(hwnd, IDOK as isize);
@@ -1227,9 +1275,22 @@ unsafe fn load_debugger_path() -> Option<String> {
         return None;
     }
 
-    let mut buffer = vec![0u16; 1024];
+    let mut value_size = 0u32;
+    let size_status = RegQueryValueExW(
+        key,
+        value_name.as_ptr(),
+        null_mut(),
+        null_mut(),
+        null_mut(),
+        &mut value_size,
+    );
+    if size_status != 0 || value_size < 2 {
+        RegCloseKey(key);
+        return None;
+    }
+
+    let mut buffer = vec![0u16; (value_size as usize / size_of::<u16>()).max(2)];
     let mut value_type = 0u32;
-    let mut value_size = (buffer.len() * size_of::<u16>()) as u32;
     let status = RegQueryValueExW(
         key,
         value_name.as_ptr(),
@@ -1240,11 +1301,14 @@ unsafe fn load_debugger_path() -> Option<String> {
     );
     RegCloseKey(key);
 
-    if status != 0 || value_size == 0 {
+    if status != 0 || value_size < 2 || !(value_type == REG_SZ || value_type == REG_EXPAND_SZ) {
         return None;
     }
 
-    let length = buffer.iter().position(|value| *value == 0).unwrap_or(buffer.len());
+    let length = buffer
+        .iter()
+        .position(|value| *value == 0)
+        .unwrap_or(buffer.len());
     let raw = String::from_utf16_lossy(&buffer[..length]);
     let executable = extract_first_command_token(&raw);
     if executable.is_empty()
@@ -1255,6 +1319,42 @@ unsafe fn load_debugger_path() -> Option<String> {
     } else {
         Some(executable)
     }
+}
+
+fn quote_command_line_arg(value: &str) -> String {
+    if !value.contains([' ', '\t', '"']) {
+        return value.to_string();
+    }
+
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    let mut backslashes = 0usize;
+
+    for ch in value.chars() {
+        if ch == '\\' {
+            backslashes += 1;
+            continue;
+        }
+
+        if ch == '"' {
+            quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+            quoted.push('"');
+            backslashes = 0;
+            continue;
+        }
+
+        if backslashes > 0 {
+            quoted.push_str(&"\\".repeat(backslashes));
+            backslashes = 0;
+        }
+        quoted.push(ch);
+    }
+
+    if backslashes > 0 {
+        quoted.push_str(&"\\".repeat(backslashes * 2));
+    }
+    quoted.push('"');
+    quoted
 }
 
 fn extract_first_command_token(command_line: &str) -> String {
@@ -1453,7 +1553,9 @@ fn compare_entries(
     if left_proxy.pid == right_proxy.pid {
         if left.is_wow_task {
             return if right.is_wow_task {
-                left.image_name.to_lowercase().cmp(&right.image_name.to_lowercase())
+                left.image_name
+                    .to_lowercase()
+                    .cmp(&right.image_name.to_lowercase())
             } else {
                 Ordering::Greater
             };
@@ -1480,12 +1582,19 @@ fn compare_entries(
         ColumnId::MemUsage => left_proxy.mem_usage_kb.cmp(&right_proxy.mem_usage_kb),
         ColumnId::MemUsageDiff => left_proxy.mem_diff_kb.cmp(&right_proxy.mem_diff_kb),
         ColumnId::PageFaults => left_proxy.page_faults.cmp(&right_proxy.page_faults),
-        ColumnId::PageFaultsDiff => left_proxy.page_faults_diff.cmp(&right_proxy.page_faults_diff),
-        ColumnId::CommitCharge => left_proxy.commit_charge_kb.cmp(&right_proxy.commit_charge_kb),
+        ColumnId::PageFaultsDiff => left_proxy
+            .page_faults_diff
+            .cmp(&right_proxy.page_faults_diff),
+        ColumnId::CommitCharge => left_proxy
+            .commit_charge_kb
+            .cmp(&right_proxy.commit_charge_kb),
         ColumnId::PagedPool => left_proxy.paged_pool_kb.cmp(&right_proxy.paged_pool_kb),
-        ColumnId::NonPagedPool => left_proxy.nonpaged_pool_kb.cmp(&right_proxy.nonpaged_pool_kb),
-        ColumnId::BasePriority => priority_rank(left_proxy.priority_class)
-            .cmp(&priority_rank(right_proxy.priority_class)),
+        ColumnId::NonPagedPool => left_proxy
+            .nonpaged_pool_kb
+            .cmp(&right_proxy.nonpaged_pool_kb),
+        ColumnId::BasePriority => {
+            priority_rank(left_proxy.priority_class).cmp(&priority_rank(right_proxy.priority_class))
+        }
         ColumnId::HandleCount => left_proxy.handle_count.cmp(&right_proxy.handle_count),
         ColumnId::ThreadCount => left_proxy.thread_count.cmp(&right_proxy.thread_count),
     };
@@ -1515,7 +1624,10 @@ fn priority_rank(priority_class: u32) -> u8 {
     }
 }
 
-fn sort_proxy_entry<'a>(entry: &'a ProcEntry, sort_context: &'a HashMap<u32, ProcEntry>) -> &'a ProcEntry {
+fn sort_proxy_entry<'a>(
+    entry: &'a ProcEntry,
+    sort_context: &'a HashMap<u32, ProcEntry>,
+) -> &'a ProcEntry {
     if entry.is_wow_task {
         sort_context.get(&entry.real_pid).unwrap_or(entry)
     } else {
@@ -1669,7 +1781,8 @@ unsafe fn collect_process_entries(
                     &mut user,
                 ) != 0
                 {
-                    let cpu_time_100ns = filetime_to_u64(kernel).saturating_add(filetime_to_u64(user));
+                    let cpu_time_100ns =
+                        filetime_to_u64(kernel).saturating_add(filetime_to_u64(user));
                     let previous = previous_samples.get(&pid).cloned().unwrap_or_default();
                     let delta = cpu_time_100ns.saturating_sub(previous.raw_cpu_time_100ns);
                     raw_cpu_time_100ns = cpu_time_100ns;
@@ -1732,7 +1845,12 @@ unsafe fn collect_process_entries(
     CloseHandle(snapshot);
 
     if show_16bit {
-        collect_wow_task_entries(previous_samples, total_delta, &mut entries, &mut next_samples);
+        collect_wow_task_entries(
+            previous_samples,
+            total_delta,
+            &mut entries,
+            &mut next_samples,
+        );
     }
 
     (entries, next_samples)
@@ -1756,7 +1874,12 @@ unsafe fn collect_wow_task_entries(
     let ntvdm_parent_indexes: Vec<usize> = entries
         .iter()
         .enumerate()
-        .filter_map(|(index, entry)| entry.image_name.eq_ignore_ascii_case("ntvdm.exe").then_some(index))
+        .filter_map(|(index, entry)| {
+            entry
+                .image_name
+                .eq_ignore_ascii_case("ntvdm.exe")
+                .then_some(index)
+        })
         .collect();
 
     for parent_index in ntvdm_parent_indexes {
@@ -1778,7 +1901,10 @@ unsafe fn collect_wow_task_entries(
                 &mut context as *mut WowTaskEnumContext as LPARAM,
             );
 
-            let previous_parent = previous_samples.get(&parent_pid).cloned().unwrap_or_default();
+            let previous_parent = previous_samples
+                .get(&parent_pid)
+                .cloned()
+                .unwrap_or_default();
             let parent_delta = context
                 .time_left_100ns
                 .saturating_sub(previous_parent.display_cpu_time_100ns);
@@ -1822,13 +1948,7 @@ unsafe fn read_thread_cpu_time_100ns(thread_id: u32) -> Option<u64> {
     let mut exit = zeroed::<FILETIME>();
     let mut kernel = zeroed::<FILETIME>();
     let mut user = zeroed::<FILETIME>();
-    let ok = GetThreadTimes(
-        thread,
-        &mut creation,
-        &mut exit,
-        &mut kernel,
-        &mut user,
-    );
+    let ok = GetThreadTimes(thread, &mut creation, &mut exit, &mut kernel, &mut user);
     CloseHandle(thread);
 
     if ok == 0 {
@@ -1839,7 +1959,10 @@ unsafe fn read_thread_cpu_time_100ns(thread_id: u32) -> Option<u64> {
 }
 
 fn utf16_buffer_to_string(buffer: &[u16]) -> String {
-    let length = buffer.iter().position(|value| *value == 0).unwrap_or(buffer.len());
+    let length = buffer
+        .iter()
+        .position(|value| *value == 0)
+        .unwrap_or(buffer.len());
     String::from_utf16_lossy(&buffer[..length])
 }
 
@@ -2097,11 +2220,21 @@ impl VdmDbgApi {
         }
 
         let enum_tasks = GetProcAddress(module, b"VDMEnumTaskWOWEx\0".as_ptr())
-            .map(|proc_address| std::mem::transmute::<unsafe extern "system" fn() -> isize, VDMENUMTASKWOWEXPROC>(proc_address))
+            .map(|proc_address| {
+                std::mem::transmute::<unsafe extern "system" fn() -> isize, VDMENUMTASKWOWEXPROC>(
+                    proc_address,
+                )
+            })
             .flatten();
-        let terminate_task = GetProcAddress(module, b"VDMTerminateTaskWOW\0".as_ptr())
-            .map(|proc_address| std::mem::transmute::<unsafe extern "system" fn() -> isize, VDMTERMINATETASKINWOWPROC>(proc_address))
-            .flatten();
+        let terminate_task =
+            GetProcAddress(module, b"VDMTerminateTaskWOW\0".as_ptr())
+                .map(|proc_address| {
+                    std::mem::transmute::<
+                        unsafe extern "system" fn() -> isize,
+                        VDMTERMINATETASKINWOWPROC,
+                    >(proc_address)
+                })
+                .flatten();
 
         if enum_tasks.is_none() && terminate_task.is_none() {
             FreeLibrary(module);
