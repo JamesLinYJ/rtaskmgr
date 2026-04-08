@@ -4,6 +4,7 @@ use super::text_key::TextKey;
 use crate::resource::*;
 
 pub fn resource(id: u32) -> &'static str {
+    // 旧式资源 ID 到简体中文字符串的映射表。
     match id {
         IDS_PERFPAGETITLE => "性能",
         IDS_NETPAGETITLE => "网络",
@@ -62,6 +63,7 @@ pub fn resource(id: u32) -> &'static str {
 }
 
 pub fn text(key: TextKey) -> &'static str {
+    // 新的声明式文本键到简体中文字符串的映射表。
     match key {
         TextKey::File => "文件(&F)",
         TextKey::Options => "选项(&O)",
@@ -96,16 +98,17 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::OneGraphPerCpu => "每个 CPU 一个图表(&P)",
         TextKey::SelectColumnsMenu => "选择列(&C)...",
         TextKey::SelectColumnsTitle => "选择列",
-        TextKey::SelectProcessColumnsDescription => {
-            "选择要在任务管理器的“进程”页上显示的列。"
-        }
+        TextKey::SelectProcessColumnsDescription => "选择要在任务管理器的“进程”页上显示的列。",
         TextKey::ShowKernelTimes => "显示内核时间(&K)",
-        TextKey::NoTitle => "无标题(&N)",
         TextKey::RestoreTaskManager => "还原任务管理器(&R)",
         TextKey::EndProcess => "结束进程(&E)",
+        TextKey::EndProcessTree => "结束进程树(&T)",
+        TextKey::OpenFileLocation => "打开文件位置(&L)",
         TextKey::Debug => "调试(&D)",
         TextKey::SetPriority => "设置优先级(&P)",
         TextKey::Realtime => "实时(&R)",
+        TextKey::AboveNormal => "高于正常(&A)",
+        TextKey::BelowNormal => "低于正常(&B)",
         TextKey::SetAffinity => "设置相关性(&A)...",
         TextKey::SwitchTo => "切换到(&S)",
         TextKey::EndTask => "结束任务(&E)",
@@ -115,9 +118,7 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::SendMessage => "发送消息(&S)...",
         TextKey::SendMessageTitle => "发送消息",
         TextKey::TaskManager => "任务管理器",
-        TextKey::Tasks => "任务",
-        TextKey::Processes | TextKey::ProcessesLabel => "进程",
-        TextKey::Users => "用户",
+        TextKey::ProcessesLabel => "进程",
         TextKey::Handles => "句柄",
         TextKey::Threads => "线程",
         TextKey::CpuUsageHistory => "CPU 使用记录",
@@ -171,8 +172,6 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::BytesSent => "已发送字节",
         TextKey::BytesReceived => "已接收字节",
         TextKey::BytesTotal => "总字节数",
-        TextKey::Recv => "收",
-        TextKey::Sent => "发",
         TextKey::Connected => "已连接",
         TextKey::Disconnected => "已断开",
         TextKey::Connecting => "正在连接",
@@ -193,6 +192,14 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::NotResponding => "未响应",
         TextKey::Running => "正在运行",
         TextKey::MessageCouldNotBeSent => "无法发送该消息。",
+        TextKey::UnableToOpenFileLocation => "无法打开文件位置",
+        TextKey::KillProcessTreePrompt => {
+            "此操作将尝试终止该进程，以及所有由它直接或间接启动的进程。\n\n以这种方式强制终止进程可能会导致数据丢失和系统不稳定。\n\n是否确实要继续？"
+        }
+        TextKey::KillProcessTreeFailed => "无法完全结束进程树",
+        TextKey::KillProcessTreeFailedBody => {
+            "此进程树中的一个或多个进程无法结束。该操作未能完全成功。"
+        }
         TextKey::ConfirmLogoffSelectedUsers => "确实要注销所选用户吗？",
         TextKey::ConfirmDisconnectSelectedUsers => "确实要断开所选用户吗？",
         TextKey::SelectedUserCouldNotBeLoggedOff => "无法注销所选用户。",

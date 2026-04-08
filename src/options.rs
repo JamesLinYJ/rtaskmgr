@@ -21,6 +21,7 @@ use crate::winutil::to_wide_null;
 const TASKMAN_KEY: &str = "Software\\Microsoft\\Windows NT\\CurrentVersion\\TaskManager";
 const OPTIONS_KEY: &str = "Preferences";
 
+// 这些 flag 会按历史二进制格式打包到 `Options.flags`。
 const FLAG_MINIMIZE_ON_USE: u32 = 1 << 0;
 const FLAG_CONFIRMATIONS: u32 = 1 << 1;
 const FLAG_ALWAYS_ON_TOP: u32 = 1 << 2;
@@ -37,6 +38,7 @@ const ALL_VALID_FLAGS: u32 = FLAG_MINIMIZE_ON_USE
 #[repr(i32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
+    // 应用程序页 ListView 视图模式。
     LargeIcon = 0,
     SmallIcon = 1,
     Details = 2,
@@ -46,6 +48,7 @@ pub enum ViewMode {
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CpuHistoryMode {
+    // 性能页 CPU 历史图的两种经典显示模式。
     Sum = 0,
     Panes = 1,
 }
@@ -54,6 +57,7 @@ pub enum CpuHistoryMode {
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum UpdateSpeed {
+    // 刷新速度同时影响定时器间隔和是否暂停自动刷新。
     High = 0,
     Normal = 1,
     Low = 2,
@@ -63,6 +67,7 @@ pub enum UpdateSpeed {
 #[repr(i32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ColumnId {
+    // 进程页列枚举，顺序必须和持久化格式保持稳定。
     ImageName = 0,
     Pid = 1,
     Username = 2,
@@ -101,6 +106,7 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
+        // 默认值尽量贴近经典任务管理器的首次启动体验。
         let mut options = Self {
             cb_size: size_of::<Self>() as u32,
             timer_interval: 1000,
@@ -123,7 +129,6 @@ impl Default for Options {
 
         options.set_minimize_on_use(true);
         options.set_confirmations(true);
-        options.set_always_on_top(true);
         options.active_process_columns[0] = ColumnId::ImageName as i32;
         options.active_process_columns[1] = ColumnId::Username as i32;
         options.active_process_columns[2] = ColumnId::SessionId as i32;
@@ -136,6 +141,7 @@ impl Default for Options {
 
 impl Options {
     pub fn set_default_values(&mut self, min_width: i32, min_height: i32) {
+        // 默认窗口位置基于当前屏幕可用最大化区域居中生成。
         *self = Self::default();
 
         if screen_reader_enabled() {
@@ -162,7 +168,9 @@ impl Options {
             let key_name = to_wide_null(TASKMAN_KEY);
             let value_name = to_wide_null(OPTIONS_KEY);
             let mut key: HKEY = null_mut();
-            if RegOpenKeyExW(HKEY_CURRENT_USER, key_name.as_ptr(), 0, KEY_READ, &mut key) != ERROR_SUCCESS {
+            if RegOpenKeyExW(HKEY_CURRENT_USER, key_name.as_ptr(), 0, KEY_READ, &mut key)
+                != ERROR_SUCCESS
+            {
                 self.set_default_values(min_width, min_height);
                 return false;
             }
@@ -320,9 +328,9 @@ impl Options {
 
 fn modifiers_force_defaults() -> bool {
     unsafe {
-        GetKeyState(VK_SHIFT as i32) < 0
-            && GetKeyState(VK_MENU as i32) < 0
-            && GetKeyState(VK_CONTROL as i32) < 0
+        GetKeyState(i32::from(VK_SHIFT)) < 0
+            && GetKeyState(i32::from(VK_MENU)) < 0
+            && GetKeyState(i32::from(VK_CONTROL)) < 0
     }
 }
 

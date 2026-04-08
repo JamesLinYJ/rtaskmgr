@@ -1,10 +1,12 @@
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
+use std::env;
 
 // 进程页实现。
 // 这里负责采集进程列表、计算每轮刷新之间的增量数据、维护排序状态，
 // 并处理结束进程、调试、设置优先级和亲和性等操作。
 use std::collections::HashMap;
 use std::mem::{size_of, zeroed};
+use std::path::Path;
 use std::ptr::{null, null_mut};
 use std::slice;
 
@@ -18,7 +20,6 @@ use windows_sys::Win32::Security::{
     WinLocalServiceSid, WinLocalSystemSid, WinNetworkServiceSid, SID_NAME_USE, TOKEN_QUERY,
     TOKEN_USER,
 };
-use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
@@ -34,11 +35,12 @@ use windows_sys::Win32::System::RemoteDesktop::{
 };
 use windows_sys::Win32::System::Threading::{
     CreateProcessW, GetPriorityClass, GetProcessAffinityMask, GetProcessHandleCount,
-    GetProcessTimes, GetSystemTimes, OpenProcess, OpenProcessToken, SetPriorityClass,
-    SetProcessAffinityMask, TerminateProcess, HIGH_PRIORITY_CLASS, IDLE_PRIORITY_CLASS,
-    NORMAL_PRIORITY_CLASS, PROCESS_INFORMATION, PROCESS_QUERY_INFORMATION,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_READ,
-    REALTIME_PRIORITY_CLASS, STARTUPINFOW,
+    GetProcessTimes, GetSystemTimes, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW,
+    SetPriorityClass, SetProcessAffinityMask, TerminateProcess, ABOVE_NORMAL_PRIORITY_CLASS,
+    BELOW_NORMAL_PRIORITY_CLASS, HIGH_PRIORITY_CLASS, IDLE_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS,
+    PROCESS_INFORMATION, PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SET_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_READ, REALTIME_PRIORITY_CLASS,
+    STARTUPINFOW,
 };
 use windows_sys::Win32::UI::Controls::{
     CheckDlgButton, IsDlgButtonChecked, BST_CHECKED, BST_UNCHECKED, LVCFMT_LEFT, LVCFMT_RIGHT,
@@ -49,27 +51,29 @@ use windows_sys::Win32::UI::Controls::{
     LVNI_SELECTED, LVN_COLUMNCLICK, LVN_GETDISPINFOW, LVN_ITEMCHANGED, LVS_SHOWSELALWAYS, NMHDR,
     NMLISTVIEW, NMLVDISPINFOW,
 };
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BeginDeferWindowPos, CheckMenuRadioItem, DeferWindowPos, DestroyMenu, DialogBoxParamW,
-    EnableMenuItem, EndDeferWindowPos, EndDialog, GetClientRect, GetCursorPos, GetDlgItem,
-    GetSubMenu, GetWindowLongW, LoadMenuW, MessageBoxW, RemoveMenu, SendMessageW, SetWindowLongW,
-    TrackPopupMenuEx, GWL_STYLE, HMENU, IDCANCEL, IDOK, IDYES, MB_ICONERROR, MB_ICONEXCLAMATION,
-    MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_DISABLED, MF_GRAYED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, TPM_RETURNCMD, WM_COMMAND, WM_ENABLE, WM_INITDIALOG,
+    BeginDeferWindowPos, DeferWindowPos, EndDeferWindowPos, EndDialog, GetClientRect, GetCursorPos,
+    GetDlgItem, GetWindowLongW, MessageBoxW, SendMessageW, SetWindowLongW, TrackPopupMenuEx,
+    GWL_STYLE, IDCANCEL, IDOK, IDYES, MB_ICONERROR, MB_ICONEXCLAMATION, MB_OK, MB_YESNO,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, TPM_RETURNCMD, WM_COMMAND, WM_INITDIALOG,
     WM_SETREDRAW,
 };
 
-use crate::localization::{localize_dialog, localize_menu};
+use crate::dialog_templates::dialog_box;
+use crate::language::{localize_dialog, text, TextKey};
 use crate::options::Options;
 use crate::options::{ColumnId, UpdateSpeed};
 use crate::resource::*;
+use crate::runtime_menu::{MenuItemState, PopupMenu};
 use crate::winutil::{
-    append_32_bit_suffix, finish_list_view_update, get_window_userdata, is_32_bit_process_handle,
-    load_string, loword, make_int_resource, sanitize_task_manager_menu, set_window_userdata,
-    subclass_list_view, to_wide_null,
+    append_32_bit_suffix, finish_list_view_update_deferred, get_window_userdata,
+    is_32_bit_process_handle, load_string, loword, set_window_userdata, subclass_list_view,
+    to_wide_null,
 };
 
 const PROCESS_COLUMNS: [ProcessColumn; NUM_COLUMN] = [
+    // 列定义和旧版 Task Manager 保持兼容，既决定标题也决定默认宽度与对齐方式。
     ProcessColumn::new(IDS_COL_IMAGENAME, LVCFMT_LEFT, 107),
     ProcessColumn::new(IDS_COL_PID, LVCFMT_RIGHT, 50),
     ProcessColumn::new(IDS_COL_USERNAME, LVCFMT_LEFT, 107),
@@ -89,6 +93,7 @@ const PROCESS_COLUMNS: [ProcessColumn; NUM_COLUMN] = [
 ];
 
 const COLUMN_DIALOG_IDS: [i32; NUM_COLUMN] = [
+    // “选择列”对话框里的勾选框与列定义保持一一对应。
     IDC_IMAGENAME,
     IDC_PID,
     IDC_USERNAME,
@@ -112,6 +117,7 @@ const TEXT_CALLBACK_WIDE: *mut u16 = -1isize as *mut u16;
 
 #[derive(Clone, Copy)]
 struct ProcessColumn {
+    // `ProcessColumn` 描述一列在 UI 层的静态元数据。
     title_id: u32,
     fmt: i32,
     default_width: i32,
@@ -129,6 +135,7 @@ impl ProcessColumn {
 
 #[derive(Clone, Default)]
 struct PreviousProcSample {
+    // 上一轮采样值用于计算 CPU、内存增量和缺页增量。
     raw_cpu_time_100ns: u64,
     mem_usage_kb: u32,
     page_faults: u32,
@@ -155,8 +162,39 @@ impl DirtyColumns {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct DirtyRowRange {
+    // 列表刷新时只记录真正变更的行范围，避免整表重绘。
+    start: Option<usize>,
+    end: usize,
+}
+
+impl DirtyRowRange {
+    fn mark(&mut self, index: usize) {
+        self.start = Some(self.start.map_or(index, |current| current.min(index)));
+        self.end = self.end.max(index);
+    }
+
+    unsafe fn redraw(self, list_hwnd: HWND, item_count: usize) {
+        let Some(start) = self.start else {
+            return;
+        };
+        if item_count == 0 {
+            return;
+        }
+
+        let end = self.end.min(item_count - 1);
+        if start > end {
+            return;
+        }
+
+        SendMessageW(list_hwnd, LVM_REDRAWITEMS, start, end as LPARAM);
+    }
+}
+
 #[derive(Clone)]
 pub struct ProcEntry {
+    // `ProcEntry` 同时承载原始采样值、展示值和刷新期的脏信息。
     pid: u32,
     image_name: String,
     is_32_bit: bool,
@@ -185,14 +223,20 @@ struct ProcessStrings {
     invalid_option: String,
     no_affinity_mask: String,
     kill: String,
+    kill_tree: String,
+    kill_tree_fail: String,
+    kill_tree_fail_body: String,
     debug: String,
     prichange: String,
     cant_kill: String,
     cant_debug: String,
     cant_change_priority: String,
     cant_set_affinity: String,
+    cant_open_file_location: String,
     priority_low: String,
+    priority_below_normal: String,
     priority_normal: String,
+    priority_above_normal: String,
     priority_high: String,
     priority_realtime: String,
     priority_unknown: String,
@@ -206,6 +250,83 @@ struct ColumnDialogContext {
 struct AffinityDialogContext {
     page: *mut ProcessPageState,
     process_mask: usize,
+}
+
+#[derive(Clone, Copy)]
+enum ProcPriority {
+    Low,
+    BelowNormal,
+    Normal,
+    AboveNormal,
+    High,
+    Realtime,
+}
+
+#[derive(Clone, Copy)]
+enum ProcCommand {
+    Terminate,
+    TerminateTree,
+    Debug,
+    OpenFileLocation,
+    Affinity,
+    SetPriority(ProcPriority),
+    PickColumns,
+}
+
+impl ProcPriority {
+    const fn command_id(self) -> u16 {
+        match self {
+            Self::Low => IDM_PROC_LOW,
+            Self::BelowNormal => IDM_PROC_BELOWNORMAL,
+            Self::Normal => IDM_PROC_NORMAL,
+            Self::AboveNormal => IDM_PROC_ABOVENORMAL,
+            Self::High => IDM_PROC_HIGH,
+            Self::Realtime => IDM_PROC_REALTIME,
+        }
+    }
+
+    const fn text_key(self) -> TextKey {
+        match self {
+            Self::Low => TextKey::Low,
+            Self::BelowNormal => TextKey::BelowNormal,
+            Self::Normal => TextKey::Normal,
+            Self::AboveNormal => TextKey::AboveNormal,
+            Self::High => TextKey::High,
+            Self::Realtime => TextKey::Realtime,
+        }
+    }
+}
+
+impl ProcCommand {
+    const fn command_id(self) -> u16 {
+        match self {
+            Self::Terminate => IDM_PROC_TERMINATE,
+            Self::TerminateTree => IDM_PROC_ENDTREE,
+            Self::Debug => IDM_PROC_DEBUG,
+            Self::OpenFileLocation => IDM_PROC_OPENFILELOCATION,
+            Self::Affinity => IDM_AFFINITY,
+            Self::SetPriority(priority) => priority.command_id(),
+            Self::PickColumns => IDM_PROCCOLS,
+        }
+    }
+
+    fn from_command_id(command_id: u16, terminate_button_id: u16) -> Option<Self> {
+        match command_id {
+            id if id == terminate_button_id || id == IDM_PROC_TERMINATE => Some(Self::Terminate),
+            IDM_PROC_ENDTREE => Some(Self::TerminateTree),
+            id if id == IDC_DEBUG as u16 || id == IDM_PROC_DEBUG => Some(Self::Debug),
+            IDM_PROC_OPENFILELOCATION => Some(Self::OpenFileLocation),
+            IDM_AFFINITY => Some(Self::Affinity),
+            IDM_PROC_LOW => Some(Self::SetPriority(ProcPriority::Low)),
+            IDM_PROC_BELOWNORMAL => Some(Self::SetPriority(ProcPriority::BelowNormal)),
+            IDM_PROC_NORMAL => Some(Self::SetPriority(ProcPriority::Normal)),
+            IDM_PROC_ABOVENORMAL => Some(Self::SetPriority(ProcPriority::AboveNormal)),
+            IDM_PROC_HIGH => Some(Self::SetPriority(ProcPriority::High)),
+            IDM_PROC_REALTIME => Some(Self::SetPriority(ProcPriority::Realtime)),
+            IDM_PROCCOLS => Some(Self::PickColumns),
+            _ => None,
+        }
+    }
 }
 
 pub struct ProcessPageState {
@@ -235,10 +356,10 @@ impl Default for ProcessPageState {
             hinstance: null_mut(),
             hwnd_page: null_mut(),
             main_hwnd: null_mut(),
-            entries: Vec::new(),
+            entries: Vec::with_capacity(128),
             previous_samples: HashMap::new(),
             previous_system_time: 0,
-            active_columns: Vec::new(),
+            active_columns: Vec::with_capacity(NUM_COLUMN),
             selected_pid: None,
             sort_column: ColumnId::Pid,
             sort_direction: 1,
@@ -304,6 +425,7 @@ impl ProcessPageState {
     }
 
     pub unsafe fn timer_event(&mut self, options: &Options) {
+        // 每一轮刷新都走“采样 -> 合并旧状态 -> 排序/重绘”这条统一链路。
         self.paused = options.update_speed == UpdateSpeed::Paused as i32;
         if !self.paused {
             self.refresh_processes();
@@ -330,7 +452,7 @@ impl ProcessPageState {
             }
             code if code == LVN_ITEMCHANGED => {
                 let notify = &*(lparam as *const NMLISTVIEW);
-                if (notify.uChanged & LVIF_STATE as u32) != 0 {
+                if (notify.uChanged & LVIF_STATE) != 0 {
                     self.selected_pid = self.current_selected_pid();
                     self.update_ui_state();
                 }
@@ -357,33 +479,46 @@ impl ProcessPageState {
     }
 
     pub unsafe fn handle_command(&mut self, command_id: u16, options: Option<&mut Options>) {
-        match command_id {
-            id if id == IDC_TERMINATE as u16 || id == IDM_PROC_TERMINATE => {
-                if let Some(pid) = self.current_selected_pid() {
-                    self.kill_process(pid);
-                }
-            }
-            id if id == IDC_DEBUG as u16 || id == IDM_PROC_DEBUG => {
-                if let Some(pid) = self.current_selected_pid() {
-                    self.attach_debugger(pid);
-                }
-            }
-            IDM_AFFINITY => {
-                if let Some(pid) = self.current_selected_pid() {
-                    self.set_affinity(pid);
-                }
-            }
-            IDM_PROC_REALTIME | IDM_PROC_HIGH | IDM_PROC_NORMAL | IDM_PROC_LOW => {
-                if let Some(pid) = self.current_selected_pid() {
-                    self.set_priority(pid, command_id);
-                }
-            }
-            IDM_PROCCOLS => {
+        let Some(command) = ProcCommand::from_command_id(command_id, IDC_TERMINATE as u16) else {
+            return;
+        };
+
+        match command {
+            ProcCommand::PickColumns => {
                 if let Some(options) = options {
                     self.pick_columns(options);
                 }
             }
-            _ => {}
+            ProcCommand::Terminate => {
+                if let Some(pid) = self.current_selected_pid() {
+                    self.kill_process(pid);
+                }
+            }
+            ProcCommand::TerminateTree => {
+                if let Some(pid) = self.current_selected_pid() {
+                    self.kill_process_tree(pid);
+                }
+            }
+            ProcCommand::Debug => {
+                if let Some(pid) = self.current_selected_pid() {
+                    self.attach_debugger(pid);
+                }
+            }
+            ProcCommand::OpenFileLocation => {
+                if let Some(pid) = self.current_selected_pid() {
+                    self.open_file_location(pid);
+                }
+            }
+            ProcCommand::Affinity => {
+                if let Some(pid) = self.current_selected_pid() {
+                    self.set_affinity(pid);
+                }
+            }
+            ProcCommand::SetPriority(priority) => {
+                if let Some(pid) = self.current_selected_pid() {
+                    self.set_priority(pid, priority);
+                }
+            }
         }
     }
 
@@ -394,39 +529,9 @@ impl ProcessPageState {
             return;
         };
 
-        let popup = load_popup_menu(self.hinstance, IDR_PROC_CONTEXT);
-        if popup.is_null() {
+        let Some(popup) = self.build_context_menu(entry) else {
             return;
-        }
-
-        if self.debugger_path.is_none() {
-            EnableMenuItem(
-                popup,
-                IDM_PROC_DEBUG as u32,
-                MF_BYCOMMAND | MF_GRAYED | MF_DISABLED,
-            );
-        }
-
-        if self.processor_count <= 1 {
-            RemoveMenu(popup, IDM_AFFINITY as u32, MF_BYCOMMAND);
-        }
-
-        let priority_submenu = GetSubMenu(popup, 3);
-        if !priority_submenu.is_null() {
-            let checked = match entry.priority_class {
-                value if value == IDLE_PRIORITY_CLASS => IDM_PROC_LOW,
-                value if value == HIGH_PRIORITY_CLASS => IDM_PROC_HIGH,
-                value if value == REALTIME_PRIORITY_CLASS => IDM_PROC_REALTIME,
-                _ => IDM_PROC_NORMAL,
-            };
-            CheckMenuRadioItem(
-                priority_submenu,
-                IDM_PROC_REALTIME as u32,
-                IDM_PROC_LOW as u32,
-                checked as u32,
-                MF_BYCOMMAND,
-            );
-        }
+        };
 
         self.paused = true;
         let mut cursor = POINT { x, y };
@@ -436,7 +541,7 @@ impl ProcessPageState {
 
         SendMessageW(self.main_hwnd, crate::resource::PWM_INPOPUP, 1, 0);
         let command = TrackPopupMenuEx(
-            popup,
+            popup.as_raw(),
             TPM_RETURNCMD,
             cursor.x,
             cursor.y,
@@ -444,12 +549,95 @@ impl ProcessPageState {
             null(),
         );
         SendMessageW(self.main_hwnd, crate::resource::PWM_INPOPUP, 0, 0);
-        DestroyMenu(popup);
         self.paused = false;
 
         if command != 0 {
             self.handle_command(command as u16, None);
         }
+    }
+
+    unsafe fn build_context_menu(&self, entry: &ProcEntry) -> Option<PopupMenu> {
+        let mut priority_menu = PopupMenu::new()?;
+        let checked_priority = match entry.priority_class {
+            value if value == IDLE_PRIORITY_CLASS => ProcPriority::Low.command_id(),
+            value if value == BELOW_NORMAL_PRIORITY_CLASS => ProcPriority::BelowNormal.command_id(),
+            value if value == ABOVE_NORMAL_PRIORITY_CLASS => ProcPriority::AboveNormal.command_id(),
+            value if value == HIGH_PRIORITY_CLASS => ProcPriority::High.command_id(),
+            value if value == REALTIME_PRIORITY_CLASS => ProcPriority::Realtime.command_id(),
+            _ => ProcPriority::Normal.command_id(),
+        };
+        for priority in [
+            ProcPriority::Realtime,
+            ProcPriority::High,
+            ProcPriority::AboveNormal,
+            ProcPriority::Normal,
+            ProcPriority::BelowNormal,
+            ProcPriority::Low,
+        ] {
+            if !priority_menu.append_item(
+                priority.command_id(),
+                text(priority.text_key()),
+                if priority.command_id() == checked_priority {
+                    MenuItemState::checked()
+                } else {
+                    MenuItemState::ENABLED
+                },
+            ) {
+                return None;
+            }
+        }
+
+        let mut popup = PopupMenu::new()?;
+        for (command, label_key, state) in [
+            (
+                ProcCommand::Terminate,
+                TextKey::EndProcess,
+                MenuItemState::ENABLED,
+            ),
+            (
+                ProcCommand::TerminateTree,
+                TextKey::EndProcessTree,
+                MenuItemState::ENABLED,
+            ),
+            (
+                ProcCommand::OpenFileLocation,
+                TextKey::OpenFileLocation,
+                MenuItemState::ENABLED,
+            ),
+            (
+                ProcCommand::Debug,
+                TextKey::Debug,
+                if self.debugger_path.is_some() {
+                    MenuItemState::ENABLED
+                } else {
+                    MenuItemState::disabled()
+                },
+            ),
+        ] {
+            if !popup.append_item(command.command_id(), text(label_key), state) {
+                return None;
+            }
+        }
+
+        if !popup.append_separator() {
+            return None;
+        }
+
+        if !popup.append_submenu(text(TextKey::SetPriority), priority_menu) {
+            return None;
+        }
+
+        if self.processor_count > 1
+            && !popup.append_item(
+                ProcCommand::Affinity.command_id(),
+                text(TextKey::SetAffinity),
+                MenuItemState::ENABLED,
+            )
+        {
+            return None;
+        }
+
+        Some(popup)
     }
 
     pub unsafe fn size_page(&self) {
@@ -543,17 +731,23 @@ impl ProcessPageState {
         self.strings.invalid_option = load_string(self.hinstance, IDS_INVALIDOPTION);
         self.strings.no_affinity_mask = load_string(self.hinstance, IDS_NOAFFINITYMASK);
         self.strings.kill = load_string(self.hinstance, IDS_KILL);
+        self.strings.kill_tree = text(TextKey::KillProcessTreePrompt).to_string();
+        self.strings.kill_tree_fail = text(TextKey::KillProcessTreeFailed).to_string();
+        self.strings.kill_tree_fail_body = text(TextKey::KillProcessTreeFailedBody).to_string();
         self.strings.debug = load_string(self.hinstance, IDS_DEBUG);
         self.strings.prichange = load_string(self.hinstance, IDS_PRICHANGE);
         self.strings.cant_kill = load_string(self.hinstance, IDS_CANTKILL);
         self.strings.cant_debug = load_string(self.hinstance, IDS_CANTDEBUG);
         self.strings.cant_change_priority = load_string(self.hinstance, IDS_CANTCHANGEPRI);
         self.strings.cant_set_affinity = load_string(self.hinstance, IDS_CANTSETAFFINITY);
-        self.strings.priority_low = load_string(self.hinstance, IDS_LOW);
-        self.strings.priority_normal = load_string(self.hinstance, IDS_NORMAL);
-        self.strings.priority_high = load_string(self.hinstance, IDS_HIGH);
-        self.strings.priority_realtime = load_string(self.hinstance, IDS_REALTIME);
-        self.strings.priority_unknown = load_string(self.hinstance, IDS_UNKNOWN);
+        self.strings.cant_open_file_location = text(TextKey::UnableToOpenFileLocation).to_string();
+        self.strings.priority_low = plain_text(TextKey::Low);
+        self.strings.priority_below_normal = plain_text(TextKey::BelowNormal);
+        self.strings.priority_normal = plain_text(TextKey::Normal);
+        self.strings.priority_above_normal = plain_text(TextKey::AboveNormal);
+        self.strings.priority_high = plain_text(TextKey::High);
+        self.strings.priority_realtime = plain_text(TextKey::Realtime);
+        self.strings.priority_unknown = text(TextKey::Unknown).to_string();
     }
 
     unsafe fn update_ui_state(&self) {
@@ -562,7 +756,7 @@ impl ProcessPageState {
         let has_selection = self.current_selected_pid().is_some();
         let terminate_button = GetDlgItem(self.hwnd_page, IDC_TERMINATE);
         if !terminate_button.is_null() {
-            SendMessageW(terminate_button, WM_ENABLE, has_selection as usize, 0);
+            EnableWindow(terminate_button, i32::from(has_selection));
         }
     }
 
@@ -572,8 +766,7 @@ impl ProcessPageState {
         let previous_selection = self.current_selected_pid().or(self.selected_pid);
         let system_total = current_system_time();
         let total_delta = system_total.saturating_sub(self.previous_system_time);
-        let previous_samples = self.previous_samples.clone();
-        let (entries, next_samples) = collect_process_entries(&previous_samples, total_delta);
+        let (entries, next_samples) = collect_process_entries(&self.previous_samples, total_delta);
         let current_pass = self.pass_count;
 
         for snapshot in entries {
@@ -598,33 +791,51 @@ impl ProcessPageState {
     }
 
     fn resort_entries(&mut self) {
-        self.entries
-            .sort_by(|left, right| compare_entries(left, right, self.sort_column, self.sort_direction));
+        match self.sort_column {
+            ColumnId::ImageName => {
+                if self.sort_direction < 0 {
+                    self.entries.sort_by_cached_key(|entry| {
+                        Reverse((entry.image_name.to_lowercase(), entry.pid))
+                    });
+                } else {
+                    self.entries
+                        .sort_by_cached_key(|entry| (entry.image_name.to_lowercase(), entry.pid));
+                }
+            }
+            ColumnId::Username => {
+                if self.sort_direction < 0 {
+                    self.entries.sort_by_cached_key(|entry| {
+                        Reverse((entry.user_name.to_lowercase(), entry.pid))
+                    });
+                } else {
+                    self.entries
+                        .sort_by_cached_key(|entry| (entry.user_name.to_lowercase(), entry.pid));
+                }
+            }
+            _ => {
+                self.entries.sort_by(|left, right| {
+                    compare_entries(left, right, self.sort_column, self.sort_direction)
+                });
+            }
+        }
     }
 
     fn remove_stale_entries(&mut self, current_pass: u64) {
-        let mut index = 0;
-        while index < self.entries.len() {
-            if self.entries[index].pass_count == current_pass {
-                index += 1;
-            } else {
-                self.entries.remove(index);
-            }
-        }
+        self.entries
+            .retain(|entry| entry.pass_count == current_pass);
     }
 
     unsafe fn rebuild_listview(&mut self) {
         // 这里优先复用现有行，只在身份变化时替换整行，以减少闪烁和选择状态丢失。
         let list_hwnd = self.list_hwnd();
-        SendMessageW(list_hwnd, WM_SETREDRAW, 0, 0);
-
         let selected_pid = self.selected_pid;
         let mut selected_index = None;
-        let mut existing_count = SendMessageW(list_hwnd, LVM_GETITEMCOUNT, 0, 0) as usize;
+        let existing_count = SendMessageW(list_hwnd, LVM_GETITEMCOUNT, 0, 0) as usize;
         let common_count = existing_count.min(self.entries.len());
+        let mut current_pids = Vec::with_capacity(common_count);
+        let structure_changed = existing_count != self.entries.len();
 
         for index in 0..common_count {
-            let entry = &self.entries[index];
             let mut current_item = LVITEMW {
                 mask: LVIF_PARAM,
                 iItem: index as i32,
@@ -641,6 +852,17 @@ impl ProcessPageState {
             } else {
                 None
             };
+            current_pids.push(current_pid);
+        }
+
+        if structure_changed {
+            SendMessageW(list_hwnd, WM_SETREDRAW, 0, 0);
+        }
+
+        let mut dirty_rows = DirtyRowRange::default();
+
+        for (index, current_pid) in current_pids.iter().copied().enumerate() {
+            let entry = &self.entries[index];
 
             let item_state = if selected_pid == Some(entry.pid) {
                 selected_index = Some(index);
@@ -652,32 +874,36 @@ impl ProcessPageState {
             if current_pid != Some(entry.pid) {
                 self.replace_row(list_hwnd, index, entry, item_state);
                 self.entries[index].dirty_columns = DirtyColumns::default();
-            } else {
-                if entry.dirty_columns.any() {
-                    SendMessageW(list_hwnd, LVM_REDRAWITEMS, index, index as LPARAM);
-                    self.entries[index].dirty_columns = DirtyColumns::default();
-                }
+                dirty_rows.mark(index);
+            } else if entry.dirty_columns.any() {
+                self.entries[index].dirty_columns = DirtyColumns::default();
+                dirty_rows.mark(index);
             }
         }
 
-        while existing_count > self.entries.len() {
-            existing_count -= 1;
-            SendMessageW(list_hwnd, LVM_DELETEITEM, existing_count, 0);
-        }
+        if structure_changed {
+            let mut remaining_count = existing_count;
+            while remaining_count > self.entries.len() {
+                remaining_count -= 1;
+                SendMessageW(list_hwnd, LVM_DELETEITEM, remaining_count, 0);
+            }
 
-        for index in common_count..self.entries.len() {
-            let entry = &self.entries[index];
-            let item_state = if selected_pid == Some(entry.pid) {
-                selected_index = Some(index);
-                LVIS_SELECTED | LVIS_FOCUSED
-            } else {
-                0
-            };
-            self.insert_row(list_hwnd, index, entry, item_state);
-            self.entries[index].dirty_columns = DirtyColumns::default();
-        }
+            for index in common_count..self.entries.len() {
+                let entry = &self.entries[index];
+                let item_state = if selected_pid == Some(entry.pid) {
+                    selected_index = Some(index);
+                    LVIS_SELECTED | LVIS_FOCUSED
+                } else {
+                    0
+                };
+                self.insert_row(list_hwnd, index, entry, item_state);
+                self.entries[index].dirty_columns = DirtyColumns::default();
+                dirty_rows.mark(index);
+            }
 
-        finish_list_view_update(list_hwnd);
+            finish_list_view_update_deferred(list_hwnd);
+        }
+        dirty_rows.redraw(list_hwnd, self.entries.len());
 
         if selected_index.is_none() {
             self.selected_pid = None;
@@ -720,7 +946,6 @@ impl ProcessPageState {
             ..zeroed()
         };
         SendMessageW(list_hwnd, LVM_SETITEMW, 0, &mut item as *mut _ as LPARAM);
-        SendMessageW(list_hwnd, LVM_REDRAWITEMS, index, index as LPARAM);
     }
 
     unsafe fn fill_display_info(&self, item: &mut LVITEMW) {
@@ -890,9 +1115,69 @@ impl ProcessPageState {
         }
     }
 
+    unsafe fn kill_process_tree(&mut self, pid: u32) -> bool {
+        if !self.quick_confirm(&self.strings.warning, &self.strings.kill_tree) {
+            return false;
+        }
+
+        let termination_order = collect_process_tree_termination_order(pid);
+        if termination_order.is_empty() {
+            return self.kill_process(pid);
+        }
+
+        let mut any_success = false;
+        let mut any_failure = false;
+        let mut root_error = 0u32;
+
+        for target_pid in termination_order {
+            let handle = OpenProcess(PROCESS_TERMINATE, 0, target_pid);
+            if handle.is_null() {
+                any_failure = true;
+                if target_pid == pid {
+                    root_error = windows_sys::Win32::Foundation::GetLastError();
+                }
+                continue;
+            }
+
+            if TerminateProcess(handle, 1) == 0 {
+                any_failure = true;
+                if target_pid == pid {
+                    root_error = windows_sys::Win32::Foundation::GetLastError();
+                }
+            } else {
+                any_success = true;
+            }
+            CloseHandle(handle);
+        }
+
+        if any_success {
+            self.paused = false;
+            self.refresh_processes();
+        }
+
+        if root_error != 0 && !any_success {
+            self.show_failure_message(&self.strings.cant_kill, root_error);
+            return false;
+        }
+
+        if any_failure {
+            let body_wide = to_wide_null(&self.strings.kill_tree_fail_body);
+            let title_wide = to_wide_null(&self.strings.kill_tree_fail);
+            MessageBoxW(
+                self.hwnd_page,
+                body_wide.as_ptr(),
+                title_wide.as_ptr(),
+                MB_OK | MB_ICONEXCLAMATION,
+            );
+            return false;
+        }
+
+        any_success
+    }
+
     unsafe fn attach_debugger(&mut self, pid: u32) -> bool {
         let Some(debugger_path) = self.debugger_path.as_ref() else {
-            MessageBeep(0);
+            self.show_failure_message(&self.strings.cant_debug, 2);
             return false;
         };
 
@@ -908,7 +1193,7 @@ impl ProcessPageState {
         let command_line = format!("{} -p {pid}", quote_command_line_arg(debugger_path));
         let mut command_line_wide = to_wide_null(&command_line);
         let application_name = to_wide_null(debugger_path);
-        let mut startup_info = STARTUPINFOW {
+        let startup_info = STARTUPINFOW {
             cb: size_of::<STARTUPINFOW>() as u32,
             ..zeroed()
         };
@@ -923,7 +1208,7 @@ impl ProcessPageState {
             windows_sys::Win32::System::Threading::CREATE_NEW_CONSOLE,
             null(),
             null(),
-            &mut startup_info,
+            &startup_info,
             &mut process_info,
         );
 
@@ -940,12 +1225,63 @@ impl ProcessPageState {
         }
     }
 
-    unsafe fn set_priority(&mut self, pid: u32, command_id: u16) -> bool {
-        let priority_class = match command_id {
-            IDM_PROC_LOW => IDLE_PRIORITY_CLASS,
-            IDM_PROC_HIGH => HIGH_PRIORITY_CLASS,
-            IDM_PROC_REALTIME => REALTIME_PRIORITY_CLASS,
-            _ => NORMAL_PRIORITY_CLASS,
+    unsafe fn open_file_location(&mut self, pid: u32) -> bool {
+        let Some(image_path) = query_process_image_path(pid) else {
+            self.show_failure_message(
+                &self.strings.cant_open_file_location,
+                windows_sys::Win32::Foundation::GetLastError(),
+            );
+            return false;
+        };
+
+        if !Path::new(&image_path).exists() {
+            self.show_failure_message(&self.strings.cant_open_file_location, 2);
+            return false;
+        }
+
+        let command_line = format!(
+            "explorer.exe /select,{}",
+            quote_command_line_arg(&image_path)
+        );
+        let mut command_line_wide = to_wide_null(&command_line);
+        let startup_info = STARTUPINFOW {
+            cb: size_of::<STARTUPINFOW>() as u32,
+            ..zeroed()
+        };
+        let mut process_info = zeroed::<PROCESS_INFORMATION>();
+        let created = CreateProcessW(
+            null(),
+            command_line_wide.as_mut_ptr(),
+            null_mut(),
+            null_mut(),
+            0,
+            0,
+            null(),
+            null(),
+            &startup_info,
+            &mut process_info,
+        );
+        if created == 0 {
+            self.show_failure_message(
+                &self.strings.cant_open_file_location,
+                windows_sys::Win32::Foundation::GetLastError(),
+            );
+            return false;
+        }
+
+        CloseHandle(process_info.hThread);
+        CloseHandle(process_info.hProcess);
+        true
+    }
+
+    unsafe fn set_priority(&mut self, pid: u32, priority: ProcPriority) -> bool {
+        let priority_class = match priority {
+            ProcPriority::Low => IDLE_PRIORITY_CLASS,
+            ProcPriority::BelowNormal => BELOW_NORMAL_PRIORITY_CLASS,
+            ProcPriority::Normal => NORMAL_PRIORITY_CLASS,
+            ProcPriority::AboveNormal => ABOVE_NORMAL_PRIORITY_CLASS,
+            ProcPriority::High => HIGH_PRIORITY_CLASS,
+            ProcPriority::Realtime => REALTIME_PRIORITY_CLASS,
         };
 
         if !self.quick_confirm(&self.strings.warning, &self.strings.prichange) {
@@ -995,9 +1331,9 @@ impl ProcessPageState {
                 page: self as *mut ProcessPageState,
                 process_mask,
             };
-            if DialogBoxParamW(
+            if dialog_box(
                 self.hinstance,
-                make_int_resource(IDD_AFFINITY),
+                IDD_AFFINITY,
                 self.hwnd_page,
                 Some(affinity_dialog_proc),
                 &mut context as *mut AffinityDialogContext as LPARAM,
@@ -1024,9 +1360,9 @@ impl ProcessPageState {
             page: self as *mut ProcessPageState,
             options: options as *mut Options,
         };
-        DialogBoxParamW(
+        dialog_box(
             self.hinstance,
-            make_int_resource(IDD_SELECTPROCCOLS),
+            IDD_SELECTPROCCOLS,
             self.main_hwnd,
             Some(column_select_dialog_proc),
             &mut context as *mut ColumnDialogContext as LPARAM,
@@ -1048,16 +1384,16 @@ unsafe extern "system" fn column_select_dialog_proc(
             let options = &*context.options;
 
             for &control_id in &COLUMN_DIALOG_IDS {
-                CheckDlgButton(hwnd, control_id, BST_UNCHECKED as u32);
+                CheckDlgButton(hwnd, control_id, BST_UNCHECKED);
             }
-            CheckDlgButton(hwnd, IDC_IMAGENAME, BST_CHECKED as u32);
+            CheckDlgButton(hwnd, IDC_IMAGENAME, BST_CHECKED);
 
             for column in columns_from_options(options) {
-                CheckDlgButton(hwnd, COLUMN_DIALOG_IDS[column as usize], BST_CHECKED as u32);
+                CheckDlgButton(hwnd, COLUMN_DIALOG_IDS[column as usize], BST_CHECKED);
             }
             1
         }
-        WM_COMMAND => match loword(wparam) as i32 {
+        WM_COMMAND => match i32::from(loword(wparam)) {
             IDOK => {
                 let context = &mut *(get_window_userdata(hwnd) as *mut ColumnDialogContext);
                 let page = &mut *context.page;
@@ -1097,20 +1433,20 @@ unsafe extern "system" fn affinity_dialog_proc(
             for cpu_index in 0..=MAX_AFFINITY_CPU {
                 let control_id = IDC_CPU0 + cpu_index;
                 let enabled = cpu_index < page.processor_count as i32;
-                SendMessageW(GetDlgItem(hwnd, control_id), WM_ENABLE, enabled as usize, 0);
+                EnableWindow(GetDlgItem(hwnd, control_id), i32::from(enabled));
                 CheckDlgButton(
                     hwnd,
                     control_id,
                     if enabled && (context.process_mask & (1usize << cpu_index)) != 0 {
-                        BST_CHECKED as u32
+                        BST_CHECKED
                     } else {
-                        BST_UNCHECKED as u32
+                        BST_UNCHECKED
                     },
                 );
             }
             1
         }
-        WM_COMMAND => match loword(wparam) as i32 {
+        WM_COMMAND => match i32::from(loword(wparam)) {
             IDCANCEL => {
                 EndDialog(hwnd, IDCANCEL as isize);
                 1
@@ -1121,7 +1457,7 @@ unsafe extern "system" fn affinity_dialog_proc(
 
                 context.process_mask = 0;
                 for cpu_index in 0..page.processor_count.min((MAX_AFFINITY_CPU + 1) as usize) {
-                    if IsDlgButtonChecked(hwnd, IDC_CPU0 + cpu_index as i32) == BST_CHECKED as u32 {
+                    if IsDlgButtonChecked(hwnd, IDC_CPU0 + cpu_index as i32) == BST_CHECKED {
                         context.process_mask |= 1usize << cpu_index;
                     }
                 }
@@ -1143,7 +1479,7 @@ unsafe extern "system" fn affinity_dialog_proc(
 }
 
 unsafe fn apply_selected_columns(hwnd: HWND, options: &mut Options) {
-    let mut existing_widths = HashMap::new();
+    let mut existing_widths = HashMap::with_capacity(NUM_COLUMN);
     for (index, value) in options.active_process_columns.iter().copied().enumerate() {
         let Some(column) = column_id_from_i32(value) else {
             break;
@@ -1167,8 +1503,13 @@ unsafe fn apply_selected_columns(hwnd: HWND, options: &mut Options) {
         .unwrap_or(PROCESS_COLUMNS[ColumnId::ImageName as usize].default_width);
     next_index += 1;
 
-    for column_index in 1..NUM_COLUMN {
-        if IsDlgButtonChecked(hwnd, COLUMN_DIALOG_IDS[column_index]) == BST_CHECKED as u32 {
+    for (column_index, &control_id) in COLUMN_DIALOG_IDS
+        .iter()
+        .enumerate()
+        .take(NUM_COLUMN)
+        .skip(1)
+    {
+        if IsDlgButtonChecked(hwnd, control_id) == BST_CHECKED {
             let column = column_id_from_i32(column_index as i32).unwrap_or(ColumnId::Pid);
             options.active_process_columns[next_index] = column as i32;
             options.column_widths[next_index] = existing_widths
@@ -1226,15 +1567,8 @@ unsafe fn load_debugger_path() -> Option<String> {
         .position(|value| *value == 0)
         .unwrap_or(buffer.len());
     let raw = String::from_utf16_lossy(&buffer[..length]);
-    let executable = extract_first_command_token(&raw);
-    if executable.is_empty()
-        || executable.eq_ignore_ascii_case("drwtsn32")
-        || executable.eq_ignore_ascii_case("drwtsn32.exe")
-    {
-        None
-    } else {
-        Some(executable)
-    }
+    let executable = normalize_debugger_command(&raw, value_type)?;
+    Path::new(&executable).is_file().then_some(executable)
 }
 
 fn quote_command_line_arg(value: &str) -> String {
@@ -1284,6 +1618,74 @@ fn extract_first_command_token(command_line: &str) -> String {
             .unwrap_or_default()
             .to_string()
     }
+}
+
+fn normalize_debugger_command(command_line: &str, value_type: u32) -> Option<String> {
+    normalize_debugger_command_with(command_line, value_type, expand_environment_variables)
+}
+
+fn normalize_debugger_command_with<F>(
+    command_line: &str,
+    value_type: u32,
+    expand_environment_variables: F,
+) -> Option<String>
+where
+    F: Fn(&str) -> String,
+{
+    let expanded = if value_type == REG_EXPAND_SZ {
+        expand_environment_variables(command_line)
+    } else {
+        command_line.to_string()
+    };
+    let executable = extract_first_command_token(&expanded);
+
+    if executable.is_empty()
+        || executable.eq_ignore_ascii_case("drwtsn32")
+        || executable.eq_ignore_ascii_case("drwtsn32.exe")
+    {
+        None
+    } else {
+        Some(executable)
+    }
+}
+
+fn expand_environment_variables(command_line: &str) -> String {
+    let mut expanded = String::with_capacity(command_line.len());
+    let mut cursor = command_line;
+
+    while let Some(start) = cursor.find('%') {
+        expanded.push_str(&cursor[..start]);
+        let remainder = &cursor[start + 1..];
+        let Some(end) = remainder.find('%') else {
+            expanded.push('%');
+            expanded.push_str(remainder);
+            return expanded;
+        };
+
+        let variable_name = &remainder[..end];
+        if variable_name.is_empty() {
+            expanded.push_str("%%");
+        } else if let Some(value) = lookup_environment_variable(variable_name) {
+            expanded.push_str(&value);
+        } else {
+            expanded.push('%');
+            expanded.push_str(variable_name);
+            expanded.push('%');
+        }
+
+        cursor = &remainder[end + 1..];
+    }
+
+    expanded.push_str(cursor);
+    expanded
+}
+
+fn lookup_environment_variable(variable_name: &str) -> Option<String> {
+    env::vars_os().find_map(|(key, value)| {
+        key.to_str()
+            .filter(|key| key.eq_ignore_ascii_case(variable_name))
+            .map(|_| value.to_string_lossy().into_owned())
+    })
 }
 
 unsafe fn query_process_identity(process_handle: HANDLE) -> (String, u32) {
@@ -1343,6 +1745,17 @@ fn well_known_service_name(sid: *mut core::ffi::c_void) -> Option<String> {
     }
 }
 
+unsafe fn merge_process_identity(entry: &mut ProcEntry, process_handle: HANDLE) {
+    let (user_name, session_id) = query_process_identity(process_handle);
+    if !user_name.is_empty() {
+        entry.user_name = user_name;
+    }
+    if session_id != 0 || entry.session_id == 0 {
+        entry.session_id = session_id;
+    }
+    entry.is_32_bit = is_32_bit_process_handle(process_handle);
+}
+
 unsafe fn lookup_account_name_from_sid(sid: *mut core::ffi::c_void) -> String {
     if sid.is_null() {
         return String::new();
@@ -1384,7 +1797,6 @@ unsafe fn lookup_account_name_from_sid(sid: *mut core::ffi::c_void) -> String {
 unsafe fn collect_process_identity_map() -> HashMap<u32, (String, u32)> {
     // WTS 进程枚举能一次拿到大量进程对应的 SID / Session 信息，
     // 先建表再回填到快照里，比逐进程单查用户名更高效。
-    let mut identities = HashMap::new();
     let mut process_info = null_mut::<WTS_PROCESS_INFOW>();
     let mut count = 0u32;
 
@@ -1397,9 +1809,10 @@ unsafe fn collect_process_identity_map() -> HashMap<u32, (String, u32)> {
     ) == 0
         || process_info.is_null()
     {
-        return identities;
+        return HashMap::new();
     }
 
+    let mut identities = HashMap::with_capacity(count as usize);
     let processes = slice::from_raw_parts(process_info, count as usize);
     for process in processes {
         let pid = process.ProcessId;
@@ -1479,7 +1892,7 @@ fn compare_entries(
         ColumnId::ThreadCount => left.thread_count.cmp(&right.thread_count),
     };
 
-    let ordering = if ordering == Ordering::Equal {
+    if ordering == Ordering::Equal {
         let tie_break = left.pid.cmp(&right.pid);
         if sort_direction < 0 {
             tie_break.reverse()
@@ -1490,16 +1903,16 @@ fn compare_entries(
         ordering.reverse()
     } else {
         ordering
-    };
-
-    ordering
+    }
 }
 
 fn priority_rank(priority_class: u32) -> u8 {
     match priority_class {
-        REALTIME_PRIORITY_CLASS => 3,
-        HIGH_PRIORITY_CLASS => 2,
-        NORMAL_PRIORITY_CLASS => 1,
+        REALTIME_PRIORITY_CLASS => 5,
+        HIGH_PRIORITY_CLASS => 4,
+        ABOVE_NORMAL_PRIORITY_CLASS => 3,
+        NORMAL_PRIORITY_CLASS => 2,
+        BELOW_NORMAL_PRIORITY_CLASS => 1,
         _ => 0,
     }
 }
@@ -1523,7 +1936,9 @@ fn column_text(entry: &ProcEntry, column_id: ColumnId, strings: &ProcessStrings)
         ColumnId::NonPagedPool => format_kilobytes(entry.nonpaged_pool_kb),
         ColumnId::BasePriority => match entry.priority_class {
             value if value == IDLE_PRIORITY_CLASS => strings.priority_low.clone(),
+            value if value == BELOW_NORMAL_PRIORITY_CLASS => strings.priority_below_normal.clone(),
             value if value == HIGH_PRIORITY_CLASS => strings.priority_high.clone(),
+            value if value == ABOVE_NORMAL_PRIORITY_CLASS => strings.priority_above_normal.clone(),
             value if value == REALTIME_PRIORITY_CLASS => strings.priority_realtime.clone(),
             value if value == NORMAL_PRIORITY_CLASS => strings.priority_normal.clone(),
             _ => strings.priority_unknown.clone(),
@@ -1563,6 +1978,77 @@ fn copy_text_to_callback_buffer(buffer: *mut u16, capacity: usize, text: &str) {
     }
 }
 
+fn collect_process_tree_termination_order(root_pid: u32) -> Vec<u32> {
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return vec![root_pid];
+        }
+
+        let mut child_map = HashMap::<u32, Vec<u32>>::new();
+        let mut process_entry = zeroed::<PROCESSENTRY32W>();
+        process_entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+
+        if Process32FirstW(snapshot, &mut process_entry) != 0 {
+            loop {
+                child_map
+                    .entry(process_entry.th32ParentProcessID)
+                    .or_default()
+                    .push(process_entry.th32ProcessID);
+                if Process32NextW(snapshot, &mut process_entry) == 0 {
+                    break;
+                }
+            }
+        }
+
+        CloseHandle(snapshot);
+
+        let mut order = Vec::new();
+        let mut visited = HashMap::<u32, ()>::new();
+        collect_process_tree_children(root_pid, &child_map, &mut visited, &mut order);
+        order
+    }
+}
+
+fn collect_process_tree_children(
+    pid: u32,
+    child_map: &HashMap<u32, Vec<u32>>,
+    visited: &mut HashMap<u32, ()>,
+    order: &mut Vec<u32>,
+) {
+    if visited.insert(pid, ()).is_some() {
+        return;
+    }
+
+    if let Some(children) = child_map.get(&pid) {
+        for &child_pid in children {
+            collect_process_tree_children(child_pid, child_map, visited, order);
+        }
+    }
+
+    order.push(pid);
+}
+
+unsafe fn query_process_image_path(pid: u32) -> Option<String> {
+    let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+    if handle.is_null() {
+        return None;
+    }
+
+    let mut capacity = 32768u32;
+    let mut buffer = vec![0u16; capacity as usize];
+    let success = QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut capacity);
+    let error = windows_sys::Win32::Foundation::GetLastError();
+    CloseHandle(handle);
+
+    if success == 0 {
+        windows_sys::Win32::Foundation::SetLastError(error);
+        return None;
+    }
+
+    Some(String::from_utf16_lossy(&buffer[..capacity as usize]))
+}
+
 unsafe fn collect_process_entries(
     previous_samples: &HashMap<u32, PreviousProcSample>,
     total_delta: u64,
@@ -1573,8 +2059,8 @@ unsafe fn collect_process_entries(
         return (Vec::new(), HashMap::new());
     }
 
-    let mut entries = Vec::new();
-    let mut next_samples = HashMap::new();
+    let mut entries = Vec::with_capacity(previous_samples.len().max(64));
+    let mut next_samples = HashMap::with_capacity(previous_samples.len().max(64));
     let identities = collect_process_identity_map();
     let mut process_entry = zeroed::<PROCESSENTRY32W>();
     process_entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
@@ -1615,25 +2101,15 @@ unsafe fn collect_process_entries(
 
             if pid == 0 {
                 entry.user_name = "SYSTEM".to_string();
-            } else {
-                let identity_handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-                if !identity_handle.is_null() {
-                    let (user_name, session_id) = query_process_identity(identity_handle);
-                    if !user_name.is_empty() {
-                        entry.user_name = user_name;
-                    }
-                    if session_id != 0 || entry.session_id == 0 {
-                        entry.session_id = session_id;
-                    }
-                    entry.is_32_bit = is_32_bit_process_handle(identity_handle);
-                    CloseHandle(identity_handle);
-                }
             }
 
-            let process_handle =
-                OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid);
+            let process_handle = if pid == 0 {
+                null_mut()
+            } else {
+                OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid)
+            };
             if !process_handle.is_null() {
-                entry.is_32_bit = is_32_bit_process_handle(process_handle);
+                merge_process_identity(&mut entry, process_handle);
                 let mut creation = zeroed::<FILETIME>();
                 let mut exit = zeroed::<FILETIME>();
                 let mut kernel = zeroed::<FILETIME>();
@@ -1668,9 +2144,11 @@ unsafe fn collect_process_entries(
                 {
                     let previous = previous_samples.get(&pid).cloned().unwrap_or_default();
                     entry.mem_usage_kb = (counters.WorkingSetSize / 1024) as u32;
-                    entry.mem_diff_kb = entry.mem_usage_kb as i64 - previous.mem_usage_kb as i64;
+                    entry.mem_diff_kb =
+                        i64::from(entry.mem_usage_kb) - i64::from(previous.mem_usage_kb);
                     entry.page_faults = counters.PageFaultCount;
-                    entry.page_faults_diff = entry.page_faults as i64 - previous.page_faults as i64;
+                    entry.page_faults_diff =
+                        i64::from(entry.page_faults) - i64::from(previous.page_faults);
                     entry.commit_charge_kb = (counters.PrivateUsage / 1024) as u32;
                     entry.paged_pool_kb = (counters.QuotaPagedPoolUsage / 1024) as u32;
                     entry.nonpaged_pool_kb = (counters.QuotaNonPagedPoolUsage / 1024) as u32;
@@ -1696,6 +2174,12 @@ unsafe fn collect_process_entries(
                 );
 
                 CloseHandle(process_handle);
+            } else if pid != 0 {
+                let identity_handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+                if !identity_handle.is_null() {
+                    merge_process_identity(&mut entry, identity_handle);
+                    CloseHandle(identity_handle);
+                }
             }
 
             entries.push(entry);
@@ -1723,7 +2207,7 @@ unsafe fn current_system_time() -> u64 {
 }
 
 fn filetime_to_u64(filetime: FILETIME) -> u64 {
-    ((filetime.dwHighDateTime as u64) << 32) | filetime.dwLowDateTime as u64
+    (u64::from(filetime.dwHighDateTime) << 32) | u64::from(filetime.dwLowDateTime)
 }
 
 fn utf16_buffer_to_string(buffer: &[u16]) -> String {
@@ -1734,18 +2218,24 @@ fn utf16_buffer_to_string(buffer: &[u16]) -> String {
     String::from_utf16_lossy(&buffer[..length])
 }
 
-unsafe fn load_popup_menu(hinstance: HINSTANCE, resource_id: u16) -> HMENU {
-    let menu = LoadMenuW(hinstance, make_int_resource(resource_id));
-    if menu.is_null() {
-        return null_mut();
-    }
-    localize_menu(menu, resource_id);
+fn plain_text(key: TextKey) -> String {
+    strip_access_key_markers(text(key))
+}
 
-    let popup = GetSubMenu(menu, 0);
-    RemoveMenu(menu, 0, MF_BYPOSITION);
-    DestroyMenu(menu);
-    sanitize_task_manager_menu(popup, usize::MAX);
-    popup
+fn strip_access_key_markers(label: &str) -> String {
+    let mut plain = String::with_capacity(label.len());
+    let mut chars = label.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '&' {
+            if matches!(chars.peek(), Some('&')) {
+                plain.push('&');
+                chars.next();
+            }
+            continue;
+        }
+        plain.push(ch);
+    }
+    plain
 }
 
 fn cpu_percent_from_delta(delta_100ns: u64, total_delta_100ns: u64) -> u8 {
@@ -1851,5 +2341,48 @@ fn update_process_entry(entry: &mut ProcEntry, snapshot: &ProcEntry, pass_count:
     if entry.thread_count != snapshot.thread_count {
         entry.thread_count = snapshot.thread_count;
         entry.dirty_columns.mark(ColumnId::ThreadCount);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_first_command_token, normalize_debugger_command_with};
+    use windows_sys::Win32::System::Registry::{REG_EXPAND_SZ, REG_SZ};
+
+    #[test]
+    fn extracts_quoted_absolute_debugger_path() {
+        let command = r#""C:\Tools\Debugger\dbg.exe" -p %ld -e %ld -g"#;
+        let debugger = normalize_debugger_command_with(command, REG_SZ, |value| value.to_string());
+        assert_eq!(debugger.as_deref(), Some(r"C:\Tools\Debugger\dbg.exe"));
+    }
+
+    #[test]
+    fn expands_environment_variables_before_extracting_debugger_path() {
+        let command = r#""%SystemRoot%\System32\vsjitdebugger.exe" -p %ld"#;
+        let debugger = normalize_debugger_command_with(command, REG_EXPAND_SZ, |_| {
+            r#""C:\Windows\System32\vsjitdebugger.exe" -p %ld"#.to_string()
+        });
+        assert_eq!(
+            debugger.as_deref(),
+            Some(r"C:\Windows\System32\vsjitdebugger.exe")
+        );
+    }
+
+    #[test]
+    fn rejects_legacy_drwtsn32_debugger_commands() {
+        let debugger =
+            normalize_debugger_command_with(r"drwtsn32 -p %ld -e %ld -g", REG_SZ, |value| {
+                value.to_string()
+            });
+        assert!(debugger.is_none());
+    }
+
+    #[test]
+    fn extracts_unquoted_debugger_path_with_parameters() {
+        let command = r"C:\Debuggers\dbg.exe -p %ld -e %ld";
+        assert_eq!(
+            extract_first_command_token(command),
+            r"C:\Debuggers\dbg.exe"
+        );
     }
 }

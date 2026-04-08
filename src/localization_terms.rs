@@ -1,8 +1,9 @@
-use crate::localization::{text, TextKey};
+use crate::language::{text, TextKey};
 
 // 多处复用的术语集中在这里，避免不同页面使用不一致的翻译。
 
 pub fn user_column_titles() -> [&'static str; 4] {
+    // 用户页列标题集中放在这里，避免页面代码里散落多份语言拼装逻辑。
     [
         text(TextKey::User),
         text(TextKey::SessionId),
@@ -16,6 +17,7 @@ pub fn user_session_column_title() -> &'static str {
 }
 
 pub fn network_column_titles() -> [&'static str; 7] {
+    // 网络页列标题会被列表头和相关对话框共同复用。
     [
         text(TextKey::Adapter),
         text(TextKey::NetworkUtilization),
@@ -27,11 +29,8 @@ pub fn network_column_titles() -> [&'static str; 7] {
     ]
 }
 
-pub fn network_graph_labels() -> [&'static str; 3] {
-    [text(TextKey::Total), text(TextKey::Recv), text(TextKey::Sent)]
-}
-
 pub fn adapter_state(key: &'static str) -> &'static str {
+    // 系统状态字符串会先归一成英文键，再映射为当前语言。
     match key {
         "Connected" => text(TextKey::Connected),
         "Disconnected" => text(TextKey::Disconnected),
@@ -45,6 +44,7 @@ pub fn adapter_state(key: &'static str) -> &'static str {
 }
 
 pub fn session_state(key: &'static str) -> &'static str {
+    // 会话状态和适配器状态走同一思路：业务层只传稳定键，语言层负责翻译。
     match key {
         "Active" => text(TextKey::Active),
         "Connected" => text(TextKey::Connected),

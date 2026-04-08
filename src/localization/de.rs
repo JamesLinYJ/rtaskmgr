@@ -4,6 +4,7 @@ use super::text_key::TextKey;
 use crate::resource::*;
 
 pub fn resource(id: u32) -> &'static str {
+    // 旧式资源 ID 到德语字符串的映射表。
     match id {
         IDS_PERFPAGETITLE => "Leistung",
         IDS_NETPAGETITLE => "Netzwerk",
@@ -68,6 +69,7 @@ pub fn resource(id: u32) -> &'static str {
 }
 
 pub fn text(key: TextKey) -> &'static str {
+    // 新的声明式文本键到德语字符串的映射表。
     match key {
         TextKey::File => "&Datei",
         TextKey::Options => "&Optionen",
@@ -106,11 +108,14 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::OneGraphAllCpus => "Ein Diagramm, &alle CPUs",
         TextKey::OneGraphPerCpu => "Ein Diagramm &pro CPU",
         TextKey::ShowKernelTimes => "&Kernelzeiten anzeigen",
-        TextKey::NoTitle => "&Kein Titel",
         TextKey::RestoreTaskManager => "Task-Manager &wiederherstellen",
         TextKey::SwitchTo => "&Wechseln zu",
         TextKey::EndTask => "Task &beenden",
         TextKey::EndProcess => "Prozess &beenden",
+        TextKey::EndProcessTree
+        | TextKey::OpenFileLocation
+        | TextKey::AboveNormal
+        | TextKey::BelowNormal => super::en_us::text(key),
         TextKey::Debug => "&Debuggen",
         TextKey::SetPriority => "&Prioritaet festlegen",
         TextKey::Realtime => "&Echtzeit",
@@ -124,9 +129,6 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::Logoff => "A&bmelden",
         TextKey::SendMessage => "&Nachricht senden...",
         TextKey::TaskManager => "Task-Manager",
-        TextKey::Tasks => "Anwendungen",
-        TextKey::Processes => "Prozesse",
-        TextKey::Users => "Benutzer",
         TextKey::Handles => "Handles",
         TextKey::Threads => "Threads",
         TextKey::ProcessesLabel => "Prozesse",
@@ -170,6 +172,10 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::NotResponding => "Keine Rueckmeldung",
         TextKey::Running => "Wird ausgefuehrt",
         TextKey::MessageCouldNotBeSent => "Die Nachricht konnte nicht gesendet werden.",
+        TextKey::UnableToOpenFileLocation
+        | TextKey::KillProcessTreePrompt
+        | TextKey::KillProcessTreeFailed
+        | TextKey::KillProcessTreeFailedBody => super::en_us::text(key),
         TextKey::ConfirmLogoffSelectedUsers => {
             "Moechten Sie die ausgewaehlten Benutzer wirklich abmelden?"
         }
@@ -196,8 +202,6 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::BytesSent => "Gesendete Bytes",
         TextKey::BytesReceived => "Empfangene Bytes",
         TextKey::BytesTotal => "Bytes gesamt",
-        TextKey::Recv => "Empf.",
-        TextKey::Sent => "Ges.",
         TextKey::Connected => "Verbunden",
         TextKey::Disconnected => "Getrennt",
         TextKey::Connecting => "Wird verbunden",

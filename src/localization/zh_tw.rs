@@ -4,6 +4,7 @@ use super::text_key::TextKey;
 use crate::resource::*;
 
 pub fn resource(id: u32) -> &'static str {
+    // 旧式资源 ID 到繁体中文字符串的映射表。
     match id {
         IDS_PERFPAGETITLE => "效能",
         IDS_NETPAGETITLE => "網路",
@@ -61,6 +62,7 @@ pub fn resource(id: u32) -> &'static str {
 }
 
 pub fn text(key: TextKey) -> &'static str {
+    // 新的声明式文本键到繁体中文字符串的映射表。
     match key {
         TextKey::File => "檔案(&F)",
         TextKey::Options => "選項(&O)",
@@ -99,12 +101,15 @@ pub fn text(key: TextKey) -> &'static str {
             "選擇要在工作管理員的「處理程序」頁面上顯示的欄位。"
         }
         TextKey::ShowKernelTimes => "顯示核心時間(&K)",
-        TextKey::NoTitle => "無標題(&N)",
         TextKey::RestoreTaskManager => "還原工作管理員(&R)",
         TextKey::EndProcess => "結束處理程序(&E)",
+        TextKey::EndProcessTree => "結束處理程序樹(&T)",
+        TextKey::OpenFileLocation => "開啟檔案位置(&L)",
         TextKey::Debug => "偵錯(&D)",
         TextKey::SetPriority => "設定優先順序(&P)",
         TextKey::Realtime => "即時(&R)",
+        TextKey::AboveNormal => "高於正常(&A)",
+        TextKey::BelowNormal => "低於正常(&B)",
         TextKey::SetAffinity => "設定相依性(&A)...",
         TextKey::SwitchTo => "切換至(&S)",
         TextKey::EndTask => "結束工作(&E)",
@@ -114,9 +119,7 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::SendMessage => "傳送訊息(&S)...",
         TextKey::SendMessageTitle => "傳送訊息",
         TextKey::TaskManager => "工作管理員",
-        TextKey::Tasks => "工作",
-        TextKey::Processes | TextKey::ProcessesLabel => "處理程序",
-        TextKey::Users => "使用者",
+        TextKey::ProcessesLabel => "處理程序",
         TextKey::Handles => "控制代碼",
         TextKey::Threads => "執行緒",
         TextKey::CpuUsageHistory => "CPU 使用記錄",
@@ -170,8 +173,6 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::BytesSent => "已傳送位元組",
         TextKey::BytesReceived => "已接收位元組",
         TextKey::BytesTotal => "位元組總數",
-        TextKey::Recv => "收",
-        TextKey::Sent => "送",
         TextKey::Connected => "已連線",
         TextKey::Disconnected => "已中斷",
         TextKey::Connecting => "正在連線",
@@ -192,6 +193,14 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::NotResponding => "沒有回應",
         TextKey::Running => "執行中",
         TextKey::MessageCouldNotBeSent => "無法傳送訊息。",
+        TextKey::UnableToOpenFileLocation => "無法開啟檔案位置",
+        TextKey::KillProcessTreePrompt => {
+            "此操作會嘗試終止此處理程序，以及所有由它直接或間接啟動的處理程序。\n\n以這種方式強制終止處理程序可能會造成資料遺失與系統不穩定。\n\n確定要繼續嗎？"
+        }
+        TextKey::KillProcessTreeFailed => "無法完全結束處理程序樹",
+        TextKey::KillProcessTreeFailedBody => {
+            "此處理程序樹中的一或多個處理程序無法結束。該操作未能完全成功。"
+        }
         TextKey::ConfirmLogoffSelectedUsers => "確定要將選取的使用者登出嗎？",
         TextKey::ConfirmDisconnectSelectedUsers => "確定要中斷選取的使用者嗎？",
         TextKey::SelectedUserCouldNotBeLoggedOff => "無法將選取的使用者登出。",

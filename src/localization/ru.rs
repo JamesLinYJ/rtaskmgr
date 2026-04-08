@@ -4,6 +4,7 @@ use super::text_key::TextKey;
 use crate::resource::*;
 
 pub fn resource(id: u32) -> &'static str {
+    // 旧式资源 ID 到俄语字符串的映射表。
     match id {
         IDS_PERFPAGETITLE => "Быстродействие",
         IDS_NETPAGETITLE => "Сеть",
@@ -68,6 +69,7 @@ pub fn resource(id: u32) -> &'static str {
 }
 
 pub fn text(key: TextKey) -> &'static str {
+    // 新的声明式文本键到俄语字符串的映射表。
     match key {
         TextKey::File => "&Файл",
         TextKey::Options => "&Параметры",
@@ -106,11 +108,14 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::OneGraphAllCpus => "Один график, &все CPU",
         TextKey::OneGraphPerCpu => "Один график &на CPU",
         TextKey::ShowKernelTimes => "Показывать время &ядра",
-        TextKey::NoTitle => "&Без заголовка",
         TextKey::RestoreTaskManager => "&Восстановить диспетчер задач",
         TextKey::SwitchTo => "Пере&ключить",
         TextKey::EndTask => "&Снять задачу",
         TextKey::EndProcess => "&Завершить процесс",
+        TextKey::EndProcessTree
+        | TextKey::OpenFileLocation
+        | TextKey::AboveNormal
+        | TextKey::BelowNormal => super::en_us::text(key),
         TextKey::Debug => "&Отладка",
         TextKey::SetPriority => "Задать &приоритет",
         TextKey::Realtime => "&Реального времени",
@@ -124,9 +129,6 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::Logoff => "&Выход из системы",
         TextKey::SendMessage => "&Отправить сообщение...",
         TextKey::TaskManager => "Диспетчер задач",
-        TextKey::Tasks => "Приложения",
-        TextKey::Processes => "Процессы",
-        TextKey::Users => "Пользователи",
         TextKey::Handles => "Дескрипторы",
         TextKey::Threads => "Потоки",
         TextKey::ProcessesLabel => "Процессы",
@@ -170,6 +172,10 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::NotResponding => "Не отвечает",
         TextKey::Running => "Работает",
         TextKey::MessageCouldNotBeSent => "Сообщение не удалось отправить.",
+        TextKey::UnableToOpenFileLocation
+        | TextKey::KillProcessTreePrompt
+        | TextKey::KillProcessTreeFailed
+        | TextKey::KillProcessTreeFailedBody => super::en_us::text(key),
         TextKey::ConfirmLogoffSelectedUsers => {
             "Вы действительно хотите завершить сеанс выбранных пользователей?"
         }
@@ -196,8 +202,6 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::BytesSent => "Отправлено байт",
         TextKey::BytesReceived => "Получено байт",
         TextKey::BytesTotal => "Всего байт",
-        TextKey::Recv => "Принято",
-        TextKey::Sent => "Отпр.",
         TextKey::Connected => "Подключено",
         TextKey::Disconnected => "Отключено",
         TextKey::Connecting => "Подключение",

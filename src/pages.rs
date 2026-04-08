@@ -1,4 +1,4 @@
-﻿use std::ptr::null_mut;
+use std::ptr::null_mut;
 
 use windows_sys::Win32::Foundation::{GetLastError, HINSTANCE, HWND, LPARAM, WPARAM};
 
@@ -10,16 +10,17 @@ use windows_sys::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH};
 use windows_sys::Win32::UI::Controls::DRAWITEMSTRUCT;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateDialogParamW, DestroyMenu, DestroyWindow, DrawMenuBar, GetDlgCtrlID, GetDlgItem,
-    GetWindowLongW, HMENU, HTCAPTION, LoadMenuW, SendMessageW, SetMenu, SetWindowLongW,
-    SetWindowPos, ShowWindow, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WM_COMMAND,
-    WM_CONTEXTMENU, WM_CTLCOLORBTN, WM_DRAWITEM, WM_INITDIALOG, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_NCLBUTTONDBLCLK, WM_NOTIFY, WM_SHOWWINDOW, WM_SIZE, WM_VSCROLL, GWL_STYLE,
-    WS_CLIPCHILDREN,
+    DestroyMenu, DestroyWindow, DrawMenuBar, GetDlgCtrlID, GetDlgItem, GetWindowLongW,
+    SendMessageW, SetMenu, SetWindowLongW, SetWindowPos, ShowWindow, GWL_STYLE, HMENU, HTCAPTION,
+    SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WM_COMMAND, WM_CONTEXTMENU, WM_CTLCOLORBTN,
+    WM_DRAWITEM, WM_INITDIALOG, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEWHEEL,
+    WM_NCLBUTTONDBLCLK, WM_NOTIFY, WM_SHOWWINDOW, WM_SIZE, WM_VSCROLL, WS_CLIPCHILDREN,
 };
 
+use crate::dialog_templates::create_dialog;
+use crate::language::localize_dialog;
+use crate::menus::build_main_menu;
 use crate::netpage::NetworkPageState;
-use crate::localization::{localize_dialog, localize_menu};
 use crate::options::Options;
 use crate::perfpage::{PerformancePageState, PerformanceSnapshot};
 use crate::procpage::ProcessPageState;
@@ -31,12 +32,10 @@ use crate::resource::{
 };
 use crate::taskpage::TaskPageState;
 use crate::userpage::UserPageState;
-use crate::winutil::{
-    get_window_userdata, load_string, make_int_resource, sanitize_task_manager_menu,
-    set_window_userdata,
-};
+use crate::winutil::{get_window_userdata, load_string, set_window_userdata};
 
 enum PageFocusTarget {
+    // 每个页面激活后都有一个更自然的初始焦点目标。
     None,
     Tabs,
     Control(i32),
@@ -62,6 +61,7 @@ pub struct DialogPage {
 
 impl DialogPage {
     pub fn task_page() -> Self {
+        // 页面构造阶段只声明类型和元数据，不创建真实窗口。
         Self {
             hinstance: null_mut(),
             hwnd: null_mut(),
@@ -156,6 +156,7 @@ impl DialogPage {
     }
 
     pub fn performance_snapshot(&self) -> Option<PerformanceSnapshot> {
+        // 主框架只从性能页取轻量快照，不直接读它的内部状态。
         self.perf_state.as_ref().map(PerformancePageState::snapshot)
     }
 
@@ -198,9 +199,9 @@ impl DialogPage {
                 Some(dialog_page_proc)
             };
 
-        self.hwnd = CreateDialogParamW(
+        self.hwnd = create_dialog(
             hinstance,
-            make_int_resource(self.dialog_id),
+            self.dialog_id,
             main_hwnd,
             proc,
             self as *mut DialogPage as LPARAM,
@@ -227,7 +228,7 @@ impl DialogPage {
 
     pub unsafe fn activate(
         &mut self,
-        hinstance: HINSTANCE,
+        _hinstance: HINSTANCE,
         main_hwnd: HWND,
         options: &Options,
         processor_count: usize,
@@ -258,12 +259,9 @@ impl DialogPage {
         }
 
         let previous_menu = *current_menu;
-        let next_menu = LoadMenuW(hinstance, make_int_resource(self.menu_id));
-        if next_menu.is_null() {
+        let Some(next_menu) = build_main_menu(self.menu_id, processor_count) else {
             return Err(GetLastError());
-        }
-        localize_menu(next_menu, self.menu_id);
-        sanitize_task_manager_menu(next_menu, processor_count);
+        };
 
         *current_menu = next_menu;
         if !options.no_title() {
@@ -304,7 +302,6 @@ impl DialogPage {
     pub unsafe fn timer_event(&mut self, options: &Options, processor_count: usize) {
         // 定时刷新同样走统一入口，避免主框架需要知道每个页面各自的刷新细节。
         if let Some(perf_state) = self.perf_state.as_mut() {
-            perf_state.apply_options(self.hwnd, options, processor_count);
             perf_state.timer_event(self.hwnd, self.main_hwnd);
         }
         if let Some(proc_state) = self.proc_state.as_mut() {
@@ -493,8 +490,8 @@ unsafe extern "system" fn task_page_proc(
             if !page.is_null() && wparam as HWND == GetDlgItem(hwnd, IDC_TASKLIST) {
                 if let Some(task_state) = (*page).task_state.as_mut() {
                     task_state.show_context_menu(
-                        (lparam & 0xFFFF) as i16 as i32,
-                        ((lparam >> 16) & 0xFFFF) as i16 as i32,
+                        i32::from((lparam & 0xFFFF) as i16),
+                        i32::from(((lparam >> 16) & 0xFFFF) as i16),
                     );
                     return 1;
                 }
@@ -582,8 +579,8 @@ unsafe extern "system" fn proc_page_proc(
             if !page.is_null() && wparam as HWND == GetDlgItem(hwnd, IDC_PROCLIST) {
                 if let Some(proc_state) = (*page).proc_state.as_mut() {
                     proc_state.show_context_menu(
-                        (lparam & 0xFFFF) as i16 as i32,
-                        ((lparam >> 16) & 0xFFFF) as i16 as i32,
+                        i32::from((lparam & 0xFFFF) as i16),
+                        i32::from(((lparam >> 16) & 0xFFFF) as i16),
                     );
                     return 1;
                 }
@@ -774,6 +771,14 @@ unsafe extern "system" fn network_page_proc(
             }
             0
         }
+        WM_MOUSEWHEEL => {
+            if !page.is_null() {
+                if let Some(net_state) = (*page).net_state.as_mut() {
+                    return net_state.handle_mouse_wheel(wparam);
+                }
+            }
+            0
+        }
         WM_SHOWWINDOW | WM_SIZE => {
             if !page.is_null() {
                 if let Some(net_state) = (*page).net_state.as_mut() {
@@ -843,7 +848,7 @@ unsafe extern "system" fn users_page_proc(
         WM_COMMAND => {
             if !page.is_null() {
                 if let Some(user_state) = (*page).user_state.as_mut() {
-                    return user_state.handle_command((wparam & 0xFFFF) as u16) as isize;
+                    return isize::from(user_state.handle_command((wparam & 0xFFFF) as u16));
                 }
             }
             0
@@ -852,8 +857,8 @@ unsafe extern "system" fn users_page_proc(
             if !page.is_null() && wparam as HWND == GetDlgItem(hwnd, IDC_USERLIST) {
                 if let Some(user_state) = (*page).user_state.as_mut() {
                     user_state.show_context_menu(
-                        (lparam & 0xFFFF) as i16 as i32,
-                        ((lparam >> 16) & 0xFFFF) as i16 as i32,
+                        i32::from((lparam & 0xFFFF) as i16),
+                        i32::from(((lparam >> 16) & 0xFFFF) as i16),
                     );
                     return 1;
                 }
@@ -871,6 +876,3 @@ unsafe extern "system" fn users_page_proc(
         _ => 0,
     }
 }
-
-
-

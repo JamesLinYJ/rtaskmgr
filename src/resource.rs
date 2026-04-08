@@ -1,13 +1,15 @@
-﻿pub const TASK_PAGE: usize = 0;
-pub const PROC_PAGE: usize = 1;
+//! 运行时资源编号表。
+//! 项目已经不再依赖 `.rc` 文件，但 Win32 对话框、菜单、命令和控件仍然需要稳定的
+//! 数值 ID；这些常量就是新的单一事实来源。
 
-// 资源 ID 常量集中定义在这里，Rust 代码与 `.rc` 文件都依赖这些编号保持一致。
+pub const TASK_PAGE: usize = 0;
+pub const PROC_PAGE: usize = 1;
 
 pub const PERF_PAGE: usize = 2;
 pub const NET_PAGE: usize = 3;
 pub const USER_PAGE: usize = 4;
 pub const NUM_PAGES: usize = 5;
-pub const STATIC_CPU_GRAPH_COUNT: usize = 128;
+pub const STATIC_CPU_GRAPH_COUNT: usize = 32;
 
 pub const MAX_COLUMN: usize = 15;
 pub const NUM_COLUMN: usize = MAX_COLUMN + 1;
@@ -17,13 +19,13 @@ pub const PWM_TRAYICON: u32 = 0x0400 + 10;
 pub const PWM_ACTIVATE: u32 = 0x0400 + 11;
 pub const PWM_INPOPUP: u32 = 0x0400 + 12;
 
+// 顶层窗口、菜单和对话框模板 ID。
 pub const IDD_MAINWND: u16 = 105;
 pub const IDR_MAINMENU_TASK: u16 = 106;
 pub const IDI_MAIN: u16 = 107;
 pub const IDD_PERFPAGE: u16 = 108;
 pub const IDD_NETPAGE: u16 = 109;
 pub const IDD_PROCPAGE: u16 = 110;
-pub const IDR_PROC_CONTEXT: u16 = 111;
 pub const IDR_TASK_CONTEXT: u16 = 117;
 pub const IDI_DEFAULT: u16 = 118;
 pub const IDR_TASKVIEW: u16 = 119;
@@ -57,6 +59,7 @@ pub const IDI_TRAY9: u16 = 136;
 pub const IDI_TRAY10: u16 = 137;
 pub const IDI_TRAY11: u16 = 138;
 
+// 控件 ID。
 pub const IDC_STATUSWND: i32 = 100;
 pub const IDC_TABS: i32 = 1000;
 pub const IDC_CPUFRAME: i32 = 1001;
@@ -271,6 +274,9 @@ pub const IDM_PAUSED: u16 = 40025;
 pub const IDM_CONFIRMATIONS: u16 = 40026;
 pub const IDM_PROC_DEBUG: u16 = 40027;
 pub const IDM_PROC_TERMINATE: u16 = 40028;
+pub const IDM_PROC_ENDTREE: u16 = 40029;
+pub const IDM_PROC_ABOVENORMAL: u16 = 40030;
+pub const IDM_PROC_BELOWNORMAL: u16 = 40033;
 pub const IDM_PROC_REALTIME: u16 = 40034;
 pub const IDM_PROC_HIGH: u16 = 40035;
 pub const IDM_PROC_NORMAL: u16 = 40036;
@@ -283,6 +289,7 @@ pub const IDM_KERNELTIMES: u16 = 40056;
 pub const IDM_HIDE: u16 = 40063;
 pub const IDM_RESTORETASKMAN: u16 = 40064;
 pub const IDM_HIDEWHENMIN: u16 = 40065;
+pub const IDM_PROC_OPENFILELOCATION: u16 = 40066;
 pub const IDM_NOTITLE: u16 = 40099;
 pub const IDM_SENDMESSAGE: u16 = 3210;
 pub const IDM_DISCONNECT: u16 = 3212;
@@ -310,16 +317,6 @@ pub const US_FIRST: u16 = IDM_HIGH;
 pub const US_LAST: u16 = IDM_PAUSED;
 
 pub const TRAY_ICON_IDS: [u16; 12] = [
-    IDI_TRAY0,
-    IDI_TRAY1,
-    IDI_TRAY2,
-    IDI_TRAY3,
-    IDI_TRAY4,
-    IDI_TRAY5,
-    IDI_TRAY6,
-    IDI_TRAY7,
-    IDI_TRAY8,
-    IDI_TRAY9,
-    IDI_TRAY10,
-    IDI_TRAY11,
+    IDI_TRAY0, IDI_TRAY1, IDI_TRAY2, IDI_TRAY3, IDI_TRAY4, IDI_TRAY5, IDI_TRAY6, IDI_TRAY7,
+    IDI_TRAY8, IDI_TRAY9, IDI_TRAY10, IDI_TRAY11,
 ];

@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 // 用户页实现。
@@ -8,51 +9,50 @@ use std::ptr::null_mut;
 use std::slice;
 
 use windows_sys::Win32::Foundation::{GetLastError, HWND, LPARAM, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
 use windows_sys::Win32::System::RemoteDesktop::{
-    WTSClientName, WTSConnectQuery, WTSConnected, WTSDisconnected, WTSDisconnectSession,
-    WTSDomainName, WTSEnumerateSessionsW, WTSFreeMemory, WTSIdle, WTSInit, WTSListen,
+    WTSActive, WTSClientName, WTSConnectQuery, WTSConnected, WTSDisconnectSession, WTSDisconnected,
+    WTSDomainName, WTSDown, WTSEnumerateSessionsW, WTSFreeMemory, WTSIdle, WTSInit, WTSListen,
     WTSLogoffSession, WTSQuerySessionInformationW, WTSReset, WTSSendMessageW, WTSShadow,
-    WTSUserName, WTSActive, WTSDown, WTS_CONNECTSTATE_CLASS, WTS_CURRENT_SERVER_HANDLE,
-    WTS_SESSION_INFOW,
+    WTSUserName, WTS_CONNECTSTATE_CLASS, WTS_CURRENT_SERVER_HANDLE, WTS_SESSION_INFOW,
 };
 use windows_sys::Win32::UI::Controls::{
-    LVCFMT_LEFT, LVCFMT_RIGHT, LVCF_FMT, LVCF_SUBITEM, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_PARAM,
-    LVIF_STATE, LVIF_TEXT, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVN_COLUMNCLICK, LVN_ITEMCHANGED, LVNI_SELECTED,
-    LVM_DELETECOLUMN, LVM_DELETEITEM, LVM_ENSUREVISIBLE, LVM_GETITEMCOUNT, LVM_GETITEMW,
-    LVM_GETNEXTITEM, LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETITEMSTATE, LVM_SETITEMW,
-    NMLISTVIEW,
+    LVCFMT_LEFT, LVCFMT_RIGHT, LVCF_FMT, LVCF_SUBITEM, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW,
+    LVIF_PARAM, LVIF_STATE, LVIF_TEXT, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVM_DELETECOLUMN,
+    LVM_DELETEITEM, LVM_ENSUREVISIBLE, LVM_GETITEMCOUNT, LVM_GETITEMW, LVM_GETNEXTITEM,
+    LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETITEMSTATE, LVM_SETITEMW, LVNI_SELECTED,
+    LVN_COLUMNCLICK, LVN_ITEMCHANGED, NMLISTVIEW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
-use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BeginDeferWindowPos, DeferWindowPos, DialogBoxParamW, EndDeferWindowPos, EndDialog,
-    GetClientRect, GetDialogBaseUnits, GetDlgItem, GetWindowTextLengthW, GetWindowTextW, IDCANCEL,
-    IDNO, IDOK, MB_DEFBUTTON2, MB_ICONEXCLAMATION, MB_ICONERROR, MB_ICONINFORMATION, MB_OK,
-    MB_TOPMOST, MB_YESNO, MF_BYCOMMAND, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_BYPOSITION,
-    MF_UNCHECKED, MessageBoxW,
-    RemoveMenu, SendMessageW, TPM_RETURNCMD, TrackPopupMenuEx, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, WM_COMMAND, WM_INITDIALOG, WM_SETREDRAW,
-    LoadMenuW, GetSubMenu, HMENU,
+    BeginDeferWindowPos, DeferWindowPos, EndDeferWindowPos, EndDialog, GetClientRect,
+    GetDialogBaseUnits, GetDlgItem, GetWindowTextLengthW, GetWindowTextW, MessageBoxW,
+    SendMessageW, TrackPopupMenuEx, HMENU, IDCANCEL, IDNO, IDOK, MB_DEFBUTTON2, MB_ICONERROR,
+    MB_ICONEXCLAMATION, MB_ICONINFORMATION, MB_OK, MB_TOPMOST, MB_YESNO, MF_BYCOMMAND, MF_CHECKED,
+    MF_DISABLED, MF_GRAYED, MF_UNCHECKED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    TPM_RETURNCMD, WM_COMMAND, WM_INITDIALOG, WM_SETREDRAW,
 };
 
-use crate::localization::{
-    localize_dialog, localize_menu, session_state, text, user_column_titles,
-    user_session_column_title, TextKey,
+use crate::dialog_templates::dialog_box;
+use crate::language::{
+    localize_dialog, session_state, text, user_column_titles, user_session_column_title, TextKey,
 };
+use crate::menus::build_popup_menu;
 use crate::options::Options;
 use crate::resource::{
-    IDC_MESSAGE_MESSAGE, IDC_MESSAGE_TITLE, IDC_USERLIST, IDD_MESSAGE, IDM_DISCONNECT,
-    IDM_LOGOFF, IDM_SENDMESSAGE, IDM_SHOWDOMAINNAMES, IDR_USER_CONTEXT, IDS_TASKMGR,
+    IDC_MESSAGE_MESSAGE, IDC_MESSAGE_TITLE, IDC_USERLIST, IDD_MESSAGE, IDM_DISCONNECT, IDM_LOGOFF,
+    IDM_SENDMESSAGE, IDM_SHOWDOMAINNAMES, IDR_USER_CONTEXT, IDS_TASKMGR,
 };
 use crate::winutil::{
-    finish_list_view_update, get_window_userdata, load_string, loword, make_int_resource,
-    set_window_userdata, subclass_list_view, to_wide_null,
+    finish_list_view_update, get_window_userdata, load_string, loword, set_window_userdata,
+    subclass_list_view, to_wide_null,
 };
 
 const DEFSPACING_BASE: i32 = 3;
 const DLG_SCALE_X: i32 = 4;
 
 struct UserSessionEntry {
+    // `UserSessionEntry` 保存一行用户/会话信息以及最小重绘所需的脏标志。
     session_id: u32,
     display_name: String,
     status: String,
@@ -63,6 +63,7 @@ struct UserSessionEntry {
 
 #[derive(Default)]
 struct MessageDialogResult {
+    // 发消息对话框退出后，把标题和正文一起打包回调用点。
     title: String,
     body: String,
 }
@@ -88,7 +89,8 @@ impl UserPageState {
     pub unsafe fn initialize(&mut self, hwnd: HWND) {
         // 用户页初始化时把 ListView 立刻配置好并做首轮会话枚举，
         // 这样页面第一次切入就已经带着当前在线用户状态。
-        self.hinstance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(null_mut()) as isize;
+        self.hinstance =
+            windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(null_mut()) as isize;
         self.hwnd = hwnd;
         let list = self.list_hwnd();
         if !list.is_null() {
@@ -100,6 +102,7 @@ impl UserPageState {
     }
 
     pub fn apply_options(&mut self, options: &Options) {
+        // 用户页当前只跟随全局“无标题模式”。
         self.no_title = options.no_title();
     }
 
@@ -112,24 +115,26 @@ impl UserPageState {
     }
 
     pub unsafe fn timer_event(&mut self) {
+        // 用户/会话状态变化相对较慢，所以每轮刷新只做一次重新枚举。
         self.refresh();
     }
 
     pub fn destroy(&mut self) {}
 
     pub unsafe fn size_page(&self) {
+        // 用户页采用“列表占满上方，按钮固定在下方右侧”的经典布局。
         if self.hwnd.is_null() {
             return;
         }
         let mut parent_rect = zeroed::<RECT>();
         GetClientRect(self.hwnd, &mut parent_rect);
         let units = GetDialogBaseUnits() as usize;
-        let def_spacing = (DEFSPACING_BASE * loword(units) as i32) / DLG_SCALE_X;
+        let def_spacing = (DEFSPACING_BASE * i32::from(loword(units))) / DLG_SCALE_X;
         let mut hdwp = BeginDeferWindowPos(10);
         if hdwp.is_null() {
             return;
         }
-        let master_hwnd = GetDlgItem(self.hwnd, IDM_SENDMESSAGE as i32);
+        let master_hwnd = GetDlgItem(self.hwnd, i32::from(IDM_SENDMESSAGE));
         let list_hwnd = self.list_hwnd();
         if master_hwnd.is_null() || list_hwnd.is_null() {
             EndDeferWindowPos(hdwp);
@@ -149,7 +154,11 @@ impl UserPageState {
             (master_rect.top - list_rect.top + dy - def_spacing).max(0),
             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
-        for control_id in [IDM_DISCONNECT as i32, IDM_LOGOFF as i32, IDM_SENDMESSAGE as i32] {
+        for control_id in [
+            i32::from(IDM_DISCONNECT),
+            i32::from(IDM_LOGOFF),
+            i32::from(IDM_SENDMESSAGE),
+        ] {
             let control_hwnd = GetDlgItem(self.hwnd, control_id);
             if control_hwnd.is_null() {
                 continue;
@@ -223,17 +232,9 @@ impl UserPageState {
             return;
         }
 
-        let menu = LoadMenuW(self.hinstance as _, make_int_resource(IDR_USER_CONTEXT));
-        if menu.is_null() {
+        let Some(popup) = build_popup_menu(IDR_USER_CONTEXT, usize::MAX) else {
             return;
-        }
-        localize_menu(menu, IDR_USER_CONTEXT);
-        let popup = GetSubMenu(menu, 0);
-        RemoveMenu(menu, 0, MF_BYPOSITION);
-        windows_sys::Win32::UI::WindowsAndMessaging::DestroyMenu(menu);
-        if popup.is_null() {
-            return;
-        }
+        };
 
         self.update_menu_state(popup, &selected);
         let command = TrackPopupMenuEx(popup, TPM_RETURNCMD, x, y, self.hwnd, null_mut());
@@ -272,7 +273,12 @@ impl UserPageState {
                 iSubItem: index as i32,
                 ..zeroed()
             };
-            SendMessageW(list, LVM_INSERTCOLUMNW, index, &mut column as *mut _ as isize);
+            SendMessageW(
+                list,
+                LVM_INSERTCOLUMNW,
+                index,
+                &mut column as *mut _ as isize,
+            );
         }
     }
 
@@ -301,7 +307,7 @@ impl UserPageState {
             return;
         }
 
-        let mut sessions = Vec::new();
+        let mut sessions = Vec::with_capacity(session_count as usize);
         for session in slice::from_raw_parts(sessions_ptr, session_count as usize) {
             let user_name = query_session_string(session.SessionId, WTSUserName);
             if user_name.is_empty() {
@@ -339,7 +345,39 @@ impl UserPageState {
 
         WTSFreeMemory(sessions_ptr as _);
 
-        sessions.sort_by(|left, right| compare_user_sessions(left, right, self.sort_column, self.sort_ascending));
+        match self.sort_column {
+            1 => sessions.sort_by(|left, right| {
+                compare_user_sessions(left, right, self.sort_column, self.sort_ascending)
+            }),
+            2 => {
+                if self.sort_ascending {
+                    sessions.sort_by_cached_key(|entry| entry.status.to_lowercase());
+                } else {
+                    sessions.sort_by_cached_key(|entry| Reverse(entry.status.to_lowercase()));
+                }
+            }
+            3 => {
+                if self.sort_ascending {
+                    sessions.sort_by_cached_key(|entry| entry.client_name.to_lowercase());
+                } else {
+                    sessions.sort_by_cached_key(|entry| Reverse(entry.client_name.to_lowercase()));
+                }
+            }
+            4 => {
+                if self.sort_ascending {
+                    sessions.sort_by_cached_key(|entry| entry.session_name.to_lowercase());
+                } else {
+                    sessions.sort_by_cached_key(|entry| Reverse(entry.session_name.to_lowercase()));
+                }
+            }
+            _ => {
+                if self.sort_ascending {
+                    sessions.sort_by_cached_key(|entry| entry.display_name.to_lowercase());
+                } else {
+                    sessions.sort_by_cached_key(|entry| Reverse(entry.display_name.to_lowercase()));
+                }
+            }
+        }
         self.sessions = sessions;
         self.update_listview();
 
@@ -510,7 +548,11 @@ impl UserPageState {
         let logoff_enabled = !selected.is_empty();
 
         for session_id in &selected {
-            if let Some(session) = self.sessions.iter().find(|entry| entry.session_id == *session_id) {
+            if let Some(session) = self
+                .sessions
+                .iter()
+                .find(|entry| entry.session_id == *session_id)
+            {
                 if session.status == session_state("Disconnected") {
                     disconnect_enabled = false;
                 }
@@ -518,7 +560,7 @@ impl UserPageState {
         }
 
         for control_id in [IDM_DISCONNECT, IDM_LOGOFF, IDM_SENDMESSAGE] {
-            let control = GetDlgItem(self.hwnd, control_id as i32);
+            let control = GetDlgItem(self.hwnd, i32::from(control_id));
             if !control.is_null() {
                 let enabled = match control_id {
                     IDM_DISCONNECT => disconnect_enabled,
@@ -526,7 +568,7 @@ impl UserPageState {
                     IDM_SENDMESSAGE => send_enabled,
                     _ => false,
                 };
-                EnableWindow(control, enabled as i32);
+                EnableWindow(control, i32::from(enabled));
             }
         }
     }
@@ -538,7 +580,7 @@ impl UserPageState {
             return Vec::new();
         }
 
-        let mut selected = Vec::new();
+        let mut selected = Vec::with_capacity(8);
         let mut index = -1;
         loop {
             index = SendMessageW(
@@ -569,7 +611,11 @@ impl UserPageState {
         let logoff_enabled = !selected.is_empty();
 
         for session_id in selected {
-            if let Some(session) = self.sessions.iter().find(|entry| entry.session_id == *session_id) {
+            if let Some(session) = self
+                .sessions
+                .iter()
+                .find(|entry| entry.session_id == *session_id)
+            {
                 if session.status == session_state("Disconnected") {
                     disconnect_enabled = false;
                 }
@@ -579,27 +625,27 @@ impl UserPageState {
         if !send_enabled {
             windows_sys::Win32::UI::WindowsAndMessaging::EnableMenuItem(
                 popup,
-                IDM_SENDMESSAGE as u32,
+                u32::from(IDM_SENDMESSAGE),
                 MF_BYCOMMAND | MF_GRAYED | MF_DISABLED,
             );
         }
         if !disconnect_enabled {
             windows_sys::Win32::UI::WindowsAndMessaging::EnableMenuItem(
                 popup,
-                IDM_DISCONNECT as u32,
+                u32::from(IDM_DISCONNECT),
                 MF_BYCOMMAND | MF_GRAYED | MF_DISABLED,
             );
         }
         if !logoff_enabled {
             windows_sys::Win32::UI::WindowsAndMessaging::EnableMenuItem(
                 popup,
-                IDM_LOGOFF as u32,
+                u32::from(IDM_LOGOFF),
                 MF_BYCOMMAND | MF_GRAYED | MF_DISABLED,
             );
         }
         windows_sys::Win32::UI::WindowsAndMessaging::CheckMenuItem(
             popup,
-            IDM_SHOWDOMAINNAMES as u32,
+            u32::from(IDM_SHOWDOMAINNAMES),
             MF_BYCOMMAND
                 | if self.show_domain_names {
                     MF_CHECKED
@@ -617,9 +663,9 @@ impl UserPageState {
         }
 
         let mut result = MessageDialogResult::default();
-        if DialogBoxParamW(
+        if dialog_box(
             self.hinstance as _,
-            make_int_resource(IDD_MESSAGE),
+            IDD_MESSAGE,
             self.hwnd,
             Some(message_dialog_proc),
             &mut result as *mut _ as LPARAM,
@@ -836,7 +882,7 @@ unsafe extern "system" fn message_dialog_proc(
             localize_dialog(hwnd, IDD_MESSAGE);
             1
         }
-        WM_COMMAND => match loword(wparam) as i32 {
+        WM_COMMAND => match i32::from(loword(wparam)) {
             IDOK => {
                 let result = &mut *(get_window_userdata(hwnd) as *mut MessageDialogResult);
                 result.title = get_dialog_item_text(hwnd, IDC_MESSAGE_TITLE);
@@ -869,7 +915,19 @@ unsafe fn get_dialog_item_text(hwnd: HWND, control_id: i32) -> String {
         return String::new();
     }
 
-    let mut buffer = vec![0u16; length as usize + 1];
-    let actual = GetWindowTextW(control, buffer.as_mut_ptr(), buffer.len() as i32);
-    String::from_utf16_lossy(&buffer[..actual as usize])
+    let Ok(length) = usize::try_from(length) else {
+        return String::new();
+    };
+
+    let mut buffer = vec![0u16; length + 1];
+    let actual = GetWindowTextW(
+        control,
+        buffer.as_mut_ptr(),
+        i32::try_from(buffer.len()).expect("GetWindowTextW buffer length fits in i32"),
+    );
+    let Ok(actual) = usize::try_from(actual) else {
+        return String::new();
+    };
+
+    String::from_utf16_lossy(&buffer[..actual])
 }

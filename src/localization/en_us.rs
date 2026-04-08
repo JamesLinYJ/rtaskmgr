@@ -3,6 +3,7 @@
 use super::text_key::TextKey;
 
 pub fn resource(_id: u32) -> &'static str {
+    // 旧式资源 ID 到英文字符串的映射表。
     match _id {
         crate::resource::IDS_PERFPAGETITLE => "Performance",
         crate::resource::IDS_NETPAGETITLE => "Networking",
@@ -37,6 +38,10 @@ pub fn resource(_id: u32) -> &'static str {
         crate::resource::IDS_FMTPROCS => "Processes: %d",
         crate::resource::IDS_FMTCPU => "CPU Usage: %d%%",
         crate::resource::IDS_FMTMEM => "Mem Usage: %dK / %dK",
+        crate::resource::IDS_COL_TASKNAME => "Task",
+        crate::resource::IDS_COL_TASKSTATUS => "Status",
+        crate::resource::IDS_COL_TASKWINSTATION => "WinStation",
+        crate::resource::IDS_COL_TASKDESKTOP => "Desktop",
         crate::resource::IDS_INVALIDOPTION => "Invalid Option",
         crate::resource::IDS_NOAFFINITYMASK => {
             "The process must have affinity with at least one processor."
@@ -66,6 +71,7 @@ pub fn resource(_id: u32) -> &'static str {
 }
 
 pub fn text(key: TextKey) -> &'static str {
+    // 新的声明式文本键到英文字符串的映射表。
     match key {
         TextKey::File => "&File",
         TextKey::Options => "&Options",
@@ -105,12 +111,15 @@ pub fn text(key: TextKey) -> &'static str {
             "Select the columns that will appear on the Process page of the Task Manager."
         }
         TextKey::ShowKernelTimes => "Show &Kernel Times",
-        TextKey::NoTitle => "&No Title",
         TextKey::RestoreTaskManager => "&Restore Task Manager",
         TextKey::EndProcess => "&End Process",
+        TextKey::EndProcessTree => "End Process &Tree",
+        TextKey::OpenFileLocation => "Open File &Location",
         TextKey::Debug => "&Debug",
         TextKey::SetPriority => "Set &Priority",
         TextKey::Realtime => "&Realtime",
+        TextKey::AboveNormal => "&Above Normal",
+        TextKey::BelowNormal => "&Below Normal",
         TextKey::SetAffinity => "Set &Affinity...",
         TextKey::SwitchTo => "&Switch To",
         TextKey::EndTask => "&End Task",
@@ -120,9 +129,6 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::SendMessage => "&Send Message...",
         TextKey::SendMessageTitle => "Send Message",
         TextKey::TaskManager => "Task Manager",
-        TextKey::Tasks => "Tasks",
-        TextKey::Processes => "Processes",
-        TextKey::Users => "Users",
         TextKey::Handles => "Handles",
         TextKey::Threads => "Threads",
         TextKey::ProcessesLabel => "Processes",
@@ -178,8 +184,6 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::BytesSent => "Bytes Sent",
         TextKey::BytesReceived => "Bytes Received",
         TextKey::BytesTotal => "Bytes Total",
-        TextKey::Recv => "Recv",
-        TextKey::Sent => "Sent",
         TextKey::Connected => "Connected",
         TextKey::Disconnected => "Disconnected",
         TextKey::Connecting => "Connecting",
@@ -200,6 +204,14 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::NotResponding => "Not Responding",
         TextKey::Running => "Running",
         TextKey::MessageCouldNotBeSent => "The message could not be sent.",
+        TextKey::UnableToOpenFileLocation => "Unable to Open File Location",
+        TextKey::KillProcessTreePrompt => {
+            "This operation will attempt to terminate this process and any\nprocesses which were directly or indirectly started by it.\n\nForcing processes to terminate in this manner can cause\ndata loss and system instability.\n\nAre you sure you wish to continue?"
+        }
+        TextKey::KillProcessTreeFailed => "Unable to Completely End the Process Tree",
+        TextKey::KillProcessTreeFailedBody => {
+            "One or more of the processes in this process tree could not\nbe ended. The operation was not fully successful."
+        }
         TextKey::ConfirmLogoffSelectedUsers => {
             "Are you sure you want to logoff the selected user(s)?"
         }

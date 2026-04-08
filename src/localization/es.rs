@@ -4,6 +4,7 @@ use super::text_key::TextKey;
 use crate::resource::*;
 
 pub fn resource(id: u32) -> &'static str {
+    // 旧式资源 ID 到西班牙语字符串的映射表。
     match id {
         IDS_PERFPAGETITLE => "Rendimiento",
         IDS_NETPAGETITLE => "Red",
@@ -68,6 +69,7 @@ pub fn resource(id: u32) -> &'static str {
 }
 
 pub fn text(key: TextKey) -> &'static str {
+    // 新的声明式文本键到西班牙语字符串的映射表。
     match key {
         TextKey::File => "&Archivo",
         TextKey::Options => "&Opciones",
@@ -106,11 +108,14 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::OneGraphAllCpus => "Un gráfico, &todas las CPU",
         TextKey::OneGraphPerCpu => "Un gráfico &por CPU",
         TextKey::ShowKernelTimes => "Mostrar tiempos del &núcleo",
-        TextKey::NoTitle => "&Sin título",
         TextKey::RestoreTaskManager => "&Restaurar el Administrador de tareas",
         TextKey::SwitchTo => "&Cambiar a",
         TextKey::EndTask => "&Finalizar tarea",
         TextKey::EndProcess => "&Finalizar proceso",
+        TextKey::EndProcessTree
+        | TextKey::OpenFileLocation
+        | TextKey::AboveNormal
+        | TextKey::BelowNormal => super::en_us::text(key),
         TextKey::Debug => "&Depurar",
         TextKey::SetPriority => "Establecer &prioridad",
         TextKey::Realtime => "&Tiempo real",
@@ -124,9 +129,6 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::Logoff => "Ce&rrar sesión",
         TextKey::SendMessage => "&Enviar mensaje...",
         TextKey::TaskManager => "Administrador de tareas",
-        TextKey::Tasks => "Aplicaciones",
-        TextKey::Processes => "Procesos",
-        TextKey::Users => "Usuarios",
         TextKey::Handles => "Handles",
         TextKey::Threads => "Hilos",
         TextKey::ProcessesLabel => "Procesos",
@@ -170,6 +172,10 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::NotResponding => "No responde",
         TextKey::Running => "En ejecucion",
         TextKey::MessageCouldNotBeSent => "No se pudo enviar el mensaje.",
+        TextKey::UnableToOpenFileLocation
+        | TextKey::KillProcessTreePrompt
+        | TextKey::KillProcessTreeFailed
+        | TextKey::KillProcessTreeFailedBody => super::en_us::text(key),
         TextKey::ConfirmLogoffSelectedUsers => {
             "¿Seguro que desea cerrar la sesion de los usuarios seleccionados?"
         }
@@ -196,8 +202,6 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::BytesSent => "Bytes enviados",
         TextKey::BytesReceived => "Bytes recibidos",
         TextKey::BytesTotal => "Bytes totales",
-        TextKey::Recv => "Rec.",
-        TextKey::Sent => "Env.",
         TextKey::Connected => "Conectado",
         TextKey::Disconnected => "Desconectado",
         TextKey::Connecting => "Conectando",

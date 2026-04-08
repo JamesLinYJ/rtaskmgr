@@ -28,9 +28,6 @@
     <None Include="build.rs">
       <Filter>Project Files</Filter>
     </None>
-    <None Include="rust_taskmgr.rc">
-      <Filter>Project Files</Filter>
-    </None>
     <None Include="sysmon.manifest">
       <Filter>Project Files</Filter>
     </None>
@@ -43,7 +40,16 @@
     <None Include="src\app.rs">
       <Filter>Source Files</Filter>
     </None>
-    <None Include="src\localization.rs">
+    <None Include="src\assets.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\chart_renderer.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\dialog_templates.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\language.rs">
       <Filter>Source Files</Filter>
     </None>
     <None Include="src\localization_terms.rs">
@@ -53,6 +59,9 @@
       <Filter>Source Files</Filter>
     </None>
     <None Include="src\main.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\menus.rs">
       <Filter>Source Files</Filter>
     </None>
     <None Include="src\netpage.rs">
@@ -71,6 +80,9 @@
       <Filter>Source Files</Filter>
     </None>
     <None Include="src\resource.rs">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\runtime_menu.rs">
       <Filter>Source Files</Filter>
     </None>
     <None Include="src\taskpage.rs">

@@ -4,14 +4,20 @@
 #![windows_subsystem = "windows"]
 
 mod app;
-mod localization;
+mod assets;
+mod chart_renderer;
+mod dialog_templates;
+mod language;
+mod menus;
 mod netpage;
 mod options;
 mod pages;
+mod perf_layout;
 mod perfpage;
 mod procpage;
 #[allow(dead_code)]
 mod resource;
+mod runtime_menu;
 mod taskpage;
 mod userpage;
 mod winutil;

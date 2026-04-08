@@ -5,17 +5,17 @@
 use std::env;
 use std::mem::{size_of, transmute, zeroed};
 use std::ptr::{null, null_mut};
+use std::sync::OnceLock;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, FILETIME, FreeLibrary, HANDLE, HINSTANCE, HWND, INVALID_HANDLE_VALUE, LPARAM,
-    POINT, RECT, TRUE, WPARAM, ERROR_ALREADY_EXISTS,
+    CloseHandle, FreeLibrary, ERROR_ALREADY_EXISTS, FILETIME, HANDLE, HINSTANCE, HWND,
+    INVALID_HANDLE_VALUE, LPARAM, POINT, RECT, TRUE, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
     CreateRectRgn, DeleteObject, FillRect, GetDC, GetDCEx, GetDeviceCaps, GetSysColorBrush,
-    GetUpdateRgn, ReleaseDC, COLOR_3DFACE, DCX_CACHE, DCX_CLIPSIBLINGS, DCX_INTERSECTRGN,
-    LOGPIXELSX,
+    GetUpdateRgn, MapWindowPoints, ReleaseDC, COLOR_3DFACE, DCX_CACHE, DCX_CLIPSIBLINGS,
+    DCX_INTERSECTRGN, LOGPIXELSX,
 };
-use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
 use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
@@ -31,52 +31,52 @@ use windows_sys::Win32::System::Threading::{
     CreateMutexW, GetSystemTimes, ReleaseMutex, SetProcessShutdownParameters, WaitForSingleObject,
 };
 use windows_sys::Win32::UI::Controls::{
-    InitCommonControlsEx, NMHDR, SB_SETPARTS, SB_SETTEXTW, SB_SIMPLE, SB_SIMPLEID,
-    SBARS_SIZEGRIP, STATUSCLASSNAMEW, SBT_NOBORDERS, TCM_ADJUSTRECT, TCM_GETCURSEL,
-    TCM_INSERTITEMW, TCM_SETCURSEL, TCN_SELCHANGE,
-    ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX,
+    InitCommonControlsEx, ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES,
+    INITCOMMONCONTROLSEX, NMHDR, SBARS_SIZEGRIP, SBT_NOBORDERS, SB_SETPARTS, SB_SETTEXTW,
+    SB_SIMPLE, SB_SIMPLEID, STATUSCLASSNAMEW, TCM_ADJUSTRECT, TCM_GETCURSEL, TCM_INSERTITEMW,
+    TCM_SETCURSEL, TCN_SELCHANGE,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, ReleaseCapture, SetCapture, VK_CONTROL,
 };
 use windows_sys::Win32::UI::Shell::{
-    Shell_NotifyIconW, ShellAboutW, WinHelpW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD,
-    NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+    ShellAboutW, Shell_NotifyIconW, WinHelpW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
+    NIM_MODIFY, NOTIFYICONDATAW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, CheckMenuItem, CheckMenuRadioItem, CreateDialogParamW, CreateWindowExW,
-    DefWindowProcW, DeleteMenu, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, DrawMenuBar,
-    EnableMenuItem,
-    FindWindowW, GetClassInfoW, GetClientRect, GetCursorPos, GetDlgItem, GetForegroundWindow,
-    GetMenu, GetMenuItemInfoW, GetMessageW, GetWindowPlacement, GetWindowRect, GetWindowLongW,
-    GetShellWindow, HACCEL, HELP_FINDER, HICON, HMENU, IsDialogMessageW, IsIconic,
-    IsWindowVisible, IsZoomed, KillTimer, LoadMenuW, LoadAcceleratorsW, LoadIconW, LoadImageW,
-    MENUITEMINFOW, MessageBoxW, MoveWindow, OpenIcon,
-    PostQuitMessage, RemoveMenu, SendMessageTimeoutW,
-    RegisterClassW, SendMessageW, SetForegroundWindow, SetMenu, SetMenuDefaultItem, SetTimer,
-    SetWindowLongW, SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenuEx, TranslateAcceleratorW,
-    TranslateMessage, WINDOWPLACEMENT, GWL_STYLE, HTCAPTION, HTCLIENT, IDCANCEL, MB_ICONSTOP, MB_OK,
-    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
-    MF_SYSMENU, MF_UNCHECKED, MIIM_ID, MINMAXINFO, MSG, SIZE_MINIMIZED, SMTO_ABORTIFHUNG, SW_HIDE,
-    SW_MINIMIZE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOREDRAW, SWP_NOSIZE, SWP_NOZORDER,
-    TPM_RETURNCMD, WM_CLOSE,
-    WM_COMMAND, WM_DESTROY, WM_ENDSESSION, WM_GETMINMAXINFO, WM_INITDIALOG, WM_INITMENU,
-    WM_CREATE, WM_ERASEBKGND, WM_LBUTTONDBLCLK, WM_MENUSELECT, WM_MOVE, WM_NCHITTEST,
-    WM_NCLBUTTONDBLCLK, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NOTIFY, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SETICON,
-    WM_SIZE, WM_TIMER, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_POPUP, WS_CLIPSIBLINGS, WS_DLGFRAME,
-    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_TILEDWINDOW, WS_VISIBLE, IMAGE_ICON,
-    LR_DEFAULTCOLOR, LR_DEFAULTSIZE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
+    CallWindowProcW, CheckMenuItem, CheckMenuRadioItem, CreateWindowExW, DefWindowProcW,
+    DeleteMenu, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, DrawMenuBar,
+    EnableMenuItem, FindWindowW, GetClassInfoW, GetClientRect, GetCursorPos, GetDlgItem,
+    GetForegroundWindow, GetMenu, GetMenuItemInfoW, GetMessageW, GetShellWindow, GetWindowLongW,
+    GetWindowPlacement, GetWindowRect, IsDialogMessageW, IsIconic, IsWindowVisible, IsZoomed,
+    KillTimer, MessageBoxW, OpenIcon, PostQuitMessage, RegisterClassW, SendMessageTimeoutW,
+    SendMessageW, SetForegroundWindow, SetMenu, SetMenuDefaultItem, SetTimer, SetWindowLongW,
+    SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenuEx, TranslateAcceleratorW,
+    TranslateMessage, GWL_STYLE, HACCEL, HELP_FINDER, HICON, HMENU, HTCAPTION, HTCLIENT,
+    HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDCANCEL, LR_DEFAULTCOLOR, LR_DEFAULTSIZE, MB_ICONSTOP,
+    MB_OK, MENUITEMINFOW, MF_BYCOMMAND, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
+    MF_SYSMENU, MF_UNCHECKED, MIIM_ID, MINMAXINFO, MSG, SIZE_MINIMIZED, SMTO_ABORTIFHUNG,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOREDRAW, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
+    SW_MINIMIZE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, TPM_RETURNCMD,
+    WINDOWPLACEMENT, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ENDSESSION, WM_ERASEBKGND,
+    WM_GETMINMAXINFO, WM_INITDIALOG, WM_INITMENU, WM_LBUTTONDBLCLK, WM_MENUSELECT, WM_MOVE,
+    WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NOTIFY, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SETICON, WM_SETREDRAW, WM_SIZE, WM_TIMER, WNDCLASSW, WS_CAPTION, WS_CHILD,
+    WS_CLIPSIBLINGS, WS_DLGFRAME, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+    WS_TILEDWINDOW, WS_VISIBLE,
 };
 
+use crate::assets::{create_accelerator_table, load_icon_from_file, TRAY_ICON_FILES};
+use crate::dialog_templates::create_dialog;
+use crate::language::{localize_dialog, menu_status_help};
+use crate::menus::build_popup_menu;
 use crate::options::Options;
 use crate::pages::{default_pages, DialogPage};
-use crate::localization::{localize_dialog, localize_menu};
 use crate::resource::*;
 use crate::winutil::{
-    format_resource_string, height, hiword, load_string, loword, make_int_resource,
-    sanitize_task_manager_menu, set_dialog_msg_result, set_style, to_wide_null, width,
+    format_resource_string, get_window_userdata_ptr, height, hiword, load_string, loword,
+    sanitize_task_manager_menu, set_dialog_msg_result, set_style, set_window_userdata_ptr,
+    to_wide_null, width,
 };
 
 const STARTUP_MUTEX_NAME: &str = "NTShell Taskman Startup Mutex";
@@ -84,14 +84,27 @@ const FINDME_TIMEOUT: u32 = 10_000;
 const RUN_DIALOG_CALC_DIRECTORY: u32 = 0x0000_0004;
 const NOTIFY_ICON_TIP_CAPACITY: usize = 128;
 
-static mut APP_INSTANCE: Option<App> = None;
-static mut FRAME_BASE_WNDPROC: Option<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> isize> = None;
+static FRAME_BASE_WNDPROC: OnceLock<
+    Option<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> isize>,
+> = OnceLock::new();
 
 const PERF_FRAME_CLASS_NAME: &str = "TaskManagerFrame";
 const BUTTON_CLASS: &str = "Button";
 
+// `RedrawWindow` 标志位只用到其中一部分，因此在这里保留最小子集。
+const RDW_INVALIDATE: u32 = 0x0001;
+const RDW_ERASE: u32 = 0x0004;
+const RDW_ALLCHILDREN: u32 = 0x0080;
+const RDW_UPDATENOW: u32 = 0x0100;
+const RDW_FRAME: u32 = 0x0400;
+
+unsafe extern "system" {
+    fn RedrawWindow(hwnd: HWND, lprcupdate: *const RECT, hrgnupdate: HANDLE, flags: u32) -> i32;
+}
+
 #[derive(Default)]
 struct GlobalStrings {
+    // 全局字符串缓存，主要供状态栏、标题栏和提示框复用。
     app_title: String,
     fmt_procs: String,
     fmt_cpu: String,
@@ -137,26 +150,18 @@ pub struct App {
 }
 
 pub fn run() -> i32 {
-    // 整个程序只维护一个全局 `App` 实例。
-    // 入口负责创建它、运行主循环，并在退出时清空全局指针。
+    // 主应用对象的生命周期由 `run()` 栈帧直接持有，
+    // 主窗口过程通过窗口 user data 回到这份状态，而不是依赖可变全局单例。
     unsafe {
         let hinstance = GetModuleHandleW(null());
-        APP_INSTANCE = Some(App::new(hinstance));
-        let exit_code = app().run_main();
-        APP_INSTANCE = None;
-        exit_code
+        let mut app = App::new(hinstance);
+        app.run_main()
     }
 }
 
-unsafe fn app() -> &'static mut App {
-    // 主窗口过程和若干全局回调都会回到这里取当前应用状态。
-    // 如果实例不存在，说明程序已经进入不可恢复的关闭阶段，直接终止进程。
-    let app_instance = std::ptr::addr_of_mut!(APP_INSTANCE);
-    if let Some(app) = (*app_instance).as_mut() {
-        app
-    } else {
-        windows_sys::Win32::System::Threading::ExitProcess(0);
-    }
+unsafe fn app_from_hwnd(hwnd: HWND) -> Option<&'static mut App> {
+    // 主窗口过程通过 `GWLP_USERDATA` 找回唯一的 `App` 实例。
+    get_window_userdata_ptr::<App>(hwnd).as_mut()
 }
 
 unsafe extern "system" fn perf_frame_wndproc(
@@ -180,7 +185,11 @@ unsafe extern "system" fn perf_frame_wndproc(
                 region = CreateRectRgn(0, 0, 0, 0);
                 if !region.is_null() {
                     GetUpdateRgn(hwnd, region, 1);
-                    hdc = GetDCEx(hwnd, region, DCX_CACHE | DCX_CLIPSIBLINGS | DCX_INTERSECTRGN);
+                    hdc = GetDCEx(
+                        hwnd,
+                        region,
+                        DCX_CACHE | DCX_CLIPSIBLINGS | DCX_INTERSECTRGN,
+                    );
                 }
             }
 
@@ -201,7 +210,7 @@ unsafe extern "system" fn perf_frame_wndproc(
             TRUE as isize
         }
         _ => {
-            if let Some(base_wndproc) = FRAME_BASE_WNDPROC {
+            if let Some(base_wndproc) = FRAME_BASE_WNDPROC.get().copied().flatten() {
                 CallWindowProcW(Some(base_wndproc), hwnd, msg, wparam, lparam)
             } else {
                 DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -215,6 +224,7 @@ type RunFileDialogFn =
 
 impl App {
     fn new(hinstance: HINSTANCE) -> Self {
+        // `App` 只构造纯状态；真正的 Win32 句柄都在启动流程中逐步建立。
         Self {
             hinstance,
             main_hwnd: null_mut(),
@@ -222,7 +232,7 @@ impl App {
             startup_mutex: null_mut(),
             accelerator_table: null_mut(),
             current_menu: null_mut(),
-            tray_icons: Vec::new(),
+            tray_icons: Vec::with_capacity(TRAY_ICON_FILES.len()),
             strings: GlobalStrings::default(),
             options: Options::default(),
             pages: default_pages(),
@@ -258,12 +268,12 @@ impl App {
         self.load_global_resources();
         self.stats.processor_count = self.query_processor_count();
 
-        self.main_hwnd = CreateDialogParamW(
+        self.main_hwnd = create_dialog(
             self.hinstance,
-            make_int_resource(IDD_MAINWND),
+            IDD_MAINWND,
             null_mut(),
             Some(main_window_proc),
-            0,
+            self as *mut Self as LPARAM,
         );
         if self.main_hwnd.is_null() {
             self.release_startup_mutex();
@@ -289,7 +299,7 @@ impl App {
         SetProcessShutdownParameters(1, 0);
 
         let mut message = zeroed::<MSG>();
-        while GetMessageW(&mut message, null_mut(), 0, 0) > 0 {
+        while GetMessageW(&raw mut message, null_mut(), 0, 0) > 0 {
             let page_hwnd = if self.options.current_page >= 0 {
                 self.pages[self.options.current_page as usize].hwnd()
             } else {
@@ -297,15 +307,21 @@ impl App {
             };
 
             let mut handled = !self.accelerator_table.is_null()
-                && TranslateAcceleratorW(self.main_hwnd, self.accelerator_table, &mut message) != 0;
+                && TranslateAcceleratorW(
+                    self.main_hwnd,
+                    self.accelerator_table,
+                    &raw const message,
+                ) != 0;
 
             if !handled && !page_hwnd.is_null() && !self.accelerator_table.is_null() {
-                handled = TranslateAcceleratorW(page_hwnd, self.accelerator_table, &mut message) != 0;
+                handled =
+                    TranslateAcceleratorW(page_hwnd, self.accelerator_table, &raw const message)
+                        != 0;
             }
 
-            if !handled && IsDialogMessageW(self.main_hwnd, &mut message) == 0 {
-                TranslateMessage(&message);
-                DispatchMessageW(&message);
+            if !handled && IsDialogMessageW(self.main_hwnd, &raw const message) == 0 {
+                TranslateMessage(&raw const message);
+                DispatchMessageW(&raw const message);
             }
         }
 
@@ -361,11 +377,19 @@ impl App {
     unsafe fn task_manager_disabled(&self) -> bool {
         // 企业策略或系统策略可能禁用 Task Manager。
         // 这里在真正启动 UI 前读取策略位，并按系统工具习惯弹出阻止提示。
-        let policy_key = to_wide_null("Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System");
+        let policy_key =
+            to_wide_null("Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System");
         let value_name = to_wide_null("DisableTaskMgr");
         let mut key: HKEY = null_mut();
 
-        if RegOpenKeyExW(HKEY_CURRENT_USER, policy_key.as_ptr(), 0, KEY_READ, &mut key) != 0 {
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            policy_key.as_ptr(),
+            0,
+            KEY_READ,
+            &mut key,
+        ) != 0
+        {
             return false;
         }
 
@@ -385,7 +409,12 @@ impl App {
         if status == 0 && raw_value != 0 {
             let title = to_wide_null(&load_string(self.hinstance, IDS_TASKMGR));
             let body = to_wide_null(&load_string(self.hinstance, IDS_TASKMGRDISABLED));
-            MessageBoxW(null_mut(), body.as_ptr(), title.as_ptr(), MB_OK | MB_ICONSTOP);
+            MessageBoxW(
+                null_mut(),
+                body.as_ptr(),
+                title.as_ptr(),
+                MB_OK | MB_ICONSTOP,
+            );
             true
         } else {
             false
@@ -394,30 +423,24 @@ impl App {
 
     unsafe fn initialize_common_controls(&self) {
         // 页面里依赖 Tab、ListView、StatusBar 等公共控件类，必须在创建前统一注册。
-        let mut classes = INITCOMMONCONTROLSEX {
+        let classes = INITCOMMONCONTROLSEX {
             dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
             dwICC: ICC_LISTVIEW_CLASSES | ICC_TAB_CLASSES | ICC_BAR_CLASSES,
         };
-        InitCommonControlsEx(&mut classes);
+        InitCommonControlsEx(&classes);
     }
 
     unsafe fn load_global_resources(&mut self) {
         // 这些资源会被菜单、状态栏和托盘图标反复使用，启动时一次性加载可以减少分散的 API 调用。
-        self.accelerator_table = LoadAcceleratorsW(self.hinstance, make_int_resource(IDR_ACCELERATORS));
+        self.accelerator_table = create_accelerator_table();
         self.strings.app_title = load_string(self.hinstance, IDS_APPTITLE);
         self.strings.fmt_procs = load_string(self.hinstance, IDS_FMTPROCS);
         self.strings.fmt_cpu = load_string(self.hinstance, IDS_FMTCPU);
         self.strings.fmt_mem = load_string(self.hinstance, IDS_FMTMEM);
         self.tray_icons.clear();
-        for icon_id in TRAY_ICON_IDS {
-            let icon_handle = LoadImageW(
-                self.hinstance,
-                make_int_resource(icon_id),
-                IMAGE_ICON,
-                0,
-                0,
-                LR_DEFAULTCOLOR | LR_DEFAULTSIZE,
-            );
+        for file_name in TRAY_ICON_FILES {
+            let icon_handle =
+                load_icon_from_file(file_name, 0, 0, LR_DEFAULTCOLOR | LR_DEFAULTSIZE);
             self.tray_icons.push(icon_handle);
         }
     }
@@ -443,25 +466,38 @@ impl App {
 
         self.options.load(self.min_width, self.min_height);
 
-        if self.options.always_on_top() {
-            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-        }
+        SetWindowPos(
+            hwnd,
+            if self.options.always_on_top() {
+                HWND_TOPMOST
+            } else {
+                HWND_NOTOPMOST
+            },
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE,
+        );
 
         self.create_status_bar();
 
-        // Set status bar TOPMOST so it doesn't slide under the tab control
+        // Keep the status bar above sibling child controls without promoting the whole app to topmost.
         if !self.status_hwnd.is_null() {
             SetWindowPos(
                 self.status_hwnd,
-                HWND_TOPMOST,
-                0, 0, 0, 0,
+                HWND_TOP,
+                0,
+                0,
+                0,
+                0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW,
             );
         }
 
         self.set_window_title();
 
-        let icon_handle = LoadIconW(self.hinstance, make_int_resource(IDI_MAIN));
+        let icon_handle = load_icon_from_file("main.ico", 0, 0, LR_DEFAULTCOLOR | LR_DEFAULTSIZE);
         if !icon_handle.is_null() {
             SendMessageW(hwnd, WM_SETICON, 1, icon_handle as LPARAM);
         }
@@ -479,7 +515,10 @@ impl App {
                 self.stats.processor_count as usize,
             ) {
                 let title = to_wide_null(&self.strings.app_title);
-                let message = to_wide_null(&format!("Failed to initialize page {} (Win32 error {}).", index, error));
+                let message = to_wide_null(&format!(
+                    "Failed to initialize page {} (Win32 error {}).",
+                    index, error
+                ));
                 MessageBoxW(hwnd, message.as_ptr(), title.as_ptr(), MB_OK | MB_ICONSTOP);
                 return 0;
             }
@@ -496,7 +535,12 @@ impl App {
                 lParam: 0,
             };
 
-            SendMessageW(tabs_hwnd, TCM_INSERTITEMW, index, &mut item as *mut _ as LPARAM);
+            SendMessageW(
+                tabs_hwnd,
+                TCM_INSERTITEMW,
+                index,
+                &mut item as *mut _ as LPARAM,
+            );
         }
 
         self.update_menu_states();
@@ -504,7 +548,12 @@ impl App {
             self.options.current_page = 0;
         }
 
-        SendMessageW(tabs_hwnd, TCM_SETCURSEL, self.options.current_page as usize, 0);
+        SendMessageW(
+            tabs_hwnd,
+            TCM_SETCURSEL,
+            self.options.current_page as usize,
+            0,
+        );
         let _ = self.activate_page(self.options.current_page as usize);
 
         let mut client_rect = zeroed::<RECT>();
@@ -520,7 +569,7 @@ impl App {
         if self.stats.processor_count <= 1 {
             let menu = GetMenu(hwnd);
             if !menu.is_null() {
-                EnableMenuItem(menu, IDM_MULTIGRAPH as u32, MF_BYCOMMAND | MF_GRAYED);
+                EnableMenuItem(menu, u32::from(IDM_MULTIGRAPH), MF_BYCOMMAND | MF_GRAYED);
             }
         }
 
@@ -569,7 +618,7 @@ impl App {
             return;
         }
 
-        FRAME_BASE_WNDPROC = button_class.lpfnWndProc;
+        let _ = FRAME_BASE_WNDPROC.set(button_class.lpfnWndProc);
         button_class.hInstance = self.hinstance;
         button_class.lpfnWndProc = Some(perf_frame_wndproc);
         let class_name = to_wide_null(PERF_FRAME_CLASS_NAME);
@@ -645,23 +694,23 @@ impl App {
 
         CheckMenuRadioItem(
             menu,
-            VM_FIRST as u32,
-            VM_LAST as u32,
-            (VM_FIRST + self.options.view_mode as u16) as u32,
+            u32::from(VM_FIRST),
+            u32::from(VM_LAST),
+            u32::from(VM_FIRST + self.options.view_mode as u16),
             MF_BYCOMMAND,
         );
         CheckMenuRadioItem(
             menu,
-            CM_FIRST as u32,
-            CM_LAST as u32,
-            (CM_FIRST + self.options.cpu_history_mode as u16) as u32,
+            u32::from(CM_FIRST),
+            u32::from(CM_LAST),
+            u32::from(CM_FIRST + self.options.cpu_history_mode as u16),
             MF_BYCOMMAND,
         );
         CheckMenuRadioItem(
             menu,
-            US_FIRST as u32,
-            US_LAST as u32,
-            (US_FIRST + self.options.update_speed as u16) as u32,
+            u32::from(US_FIRST),
+            u32::from(US_LAST),
+            u32::from(US_FIRST + self.options.update_speed as u16),
             MF_BYCOMMAND,
         );
 
@@ -675,13 +724,15 @@ impl App {
             self.check_menu(
                 menu,
                 IDM_SHOWDOMAINNAMES,
-                self.pages[USER_PAGE].user_show_domain_names().unwrap_or(false),
+                self.pages[USER_PAGE]
+                    .user_show_domain_names()
+                    .unwrap_or(false),
             );
         }
 
         EnableMenuItem(
             menu,
-            IDM_MULTIGRAPH as u32,
+            u32::from(IDM_MULTIGRAPH),
             MF_BYCOMMAND
                 | if self.stats.processor_count <= 1 {
                     MF_GRAYED
@@ -694,7 +745,7 @@ impl App {
     unsafe fn check_menu(&self, menu: HMENU, item_id: u16, checked: bool) {
         CheckMenuItem(
             menu,
-            item_id as u32,
+            u32::from(item_id),
             MF_BYCOMMAND | if checked { MF_CHECKED } else { MF_UNCHECKED },
         );
     }
@@ -746,7 +797,8 @@ impl App {
 
             // Compute borderless style from live window style (matching C++ behavior)
             let current_style = GetWindowLongW(self.main_hwnd, GWL_STYLE) as u32;
-            let live_borderless = current_style & !(WS_DLGFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
+            let live_borderless =
+                current_style & !(WS_DLGFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
             set_style(self.main_hwnd, live_borderless);
             SetMenu(self.main_hwnd, null_mut());
             SetWindowPos(
@@ -795,8 +847,28 @@ impl App {
         }
     }
 
+    unsafe fn toggle_no_title_mode(&mut self) {
+        SendMessageW(self.main_hwnd, WM_SETREDRAW, 0, 0);
+
+        self.options.set_no_title(!self.options.no_title());
+        self.apply_options_to_pages();
+        self.update_menu_states();
+        self.size_active_page();
+        SendMessageW(self.main_hwnd, WM_SETREDRAW, 1, 0);
+        RedrawWindow(
+            self.main_hwnd,
+            null(),
+            null_mut(),
+            RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW,
+        );
+    }
+
     unsafe fn on_size(&mut self, hwnd: HWND, state: u32, width_px: i32, height_px: i32) {
-        if state == SIZE_MINIMIZED && self.options.hide_when_minimized() && !GetShellWindow().is_null() {
+        // 主窗口尺寸变化时同时维护状态栏、标签页和当前活动页。
+        if state == SIZE_MINIMIZED
+            && self.options.hide_when_minimized()
+            && !GetShellWindow().is_null()
+        {
             ShowWindow(hwnd, SW_HIDE);
         }
 
@@ -808,7 +880,12 @@ impl App {
         if !tabs_hwnd.is_null() && !self.status_hwnd.is_null() {
             let mut status_rect = zeroed::<RECT>();
             GetClientRect(self.status_hwnd, &mut status_rect);
-            MapWindowPoints(self.status_hwnd, self.main_hwnd, &mut status_rect as *mut _ as _, 2);
+            MapWindowPoints(
+                self.status_hwnd,
+                self.main_hwnd,
+                &mut status_rect as *mut _ as _,
+                2,
+            );
 
             let mut tabs_rect = zeroed::<RECT>();
             GetWindowRect(tabs_hwnd, &mut tabs_rect);
@@ -832,7 +909,7 @@ impl App {
 
     unsafe fn on_timer(&mut self, hwnd: HWND) {
         // 按住 Ctrl 时暂停自动刷新，这与经典 Task Manager 的交互保持一致。
-        if GetForegroundWindow() == hwnd && GetAsyncKeyState(VK_CONTROL as i32) < 0 {
+        if GetForegroundWindow() == hwnd && GetAsyncKeyState(i32::from(VK_CONTROL)) < 0 {
             return;
         }
 
@@ -894,6 +971,7 @@ impl App {
     }
 
     unsafe fn refresh_status_bar(&self) {
+        // 状态栏只依赖运行期聚合快照，不直接向页面索要细节。
         if self.status_hwnd.is_null() || self.menu_tracking {
             return;
         }
@@ -902,7 +980,8 @@ impl App {
             &self.strings.fmt_procs,
             &[self.stats.process_count.to_string()],
         );
-        let cpu_text = format_resource_string(&self.strings.fmt_cpu, &[self.stats.cpu_usage.to_string()]);
+        let cpu_text =
+            format_resource_string(&self.strings.fmt_cpu, &[self.stats.cpu_usage.to_string()]);
         let mem_text = format_resource_string(
             &self.strings.fmt_mem,
             &[
@@ -915,12 +994,28 @@ impl App {
         let cpu_wide = to_wide_null(&cpu_text);
         let mem_wide = to_wide_null(&mem_text);
 
-        SendMessageW(self.status_hwnd, SB_SETTEXTW, 0, process_wide.as_ptr() as LPARAM);
-        SendMessageW(self.status_hwnd, SB_SETTEXTW, 1, cpu_wide.as_ptr() as LPARAM);
-        SendMessageW(self.status_hwnd, SB_SETTEXTW, 2, mem_wide.as_ptr() as LPARAM);
+        SendMessageW(
+            self.status_hwnd,
+            SB_SETTEXTW,
+            0,
+            process_wide.as_ptr() as LPARAM,
+        );
+        SendMessageW(
+            self.status_hwnd,
+            SB_SETTEXTW,
+            1,
+            cpu_wide.as_ptr() as LPARAM,
+        );
+        SendMessageW(
+            self.status_hwnd,
+            SB_SETTEXTW,
+            2,
+            mem_wide.as_ptr() as LPARAM,
+        );
     }
 
     unsafe fn update_tray(&self, command: u32, icon: HICON, tip: &str) {
+        // 托盘 API 需要一次性提交完整的 `NOTIFYICONDATAW` 结构。
         let mut data = zeroed::<NOTIFYICONDATAW>();
         data.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
         data.hWnd = self.main_hwnd;
@@ -937,7 +1032,7 @@ impl App {
             data.szTip[index] = code_unit;
         }
 
-        Shell_NotifyIconW(command, &mut data);
+        Shell_NotifyIconW(command, &data);
     }
 
     unsafe fn refresh_tray_icon(&self) {
@@ -951,11 +1046,13 @@ impl App {
             icon_index = self.tray_icons.len() - 1;
         }
 
-        let tooltip = format_resource_string(&self.strings.fmt_cpu, &[self.stats.cpu_usage.to_string()]);
+        let tooltip =
+            format_resource_string(&self.strings.fmt_cpu, &[self.stats.cpu_usage.to_string()]);
         self.update_tray(NIM_MODIFY, self.tray_icons[icon_index], &tooltip);
     }
 
     unsafe fn show_running_instance(&self) {
+        // 恢复窗口时顺带重新应用 topmost 状态，保持和当前选项一致。
         OpenIcon(self.main_hwnd);
         SetForegroundWindow(self.main_hwnd);
         SetWindowPos(
@@ -963,7 +1060,7 @@ impl App {
             if self.options.always_on_top() {
                 HWND_TOPMOST
             } else {
-                HWND_TOP
+                HWND_NOTOPMOST
             },
             0,
             0,
@@ -974,23 +1071,16 @@ impl App {
     }
 
     unsafe fn load_popup_menu(&self, resource_id: u16) -> HMENU {
-        let menu = LoadMenuW(self.hinstance, make_int_resource(resource_id));
-        if menu.is_null() {
-            return null_mut();
-        }
-        localize_menu(menu, resource_id);
-
-        let popup = windows_sys::Win32::UI::WindowsAndMessaging::GetSubMenu(menu, 0);
-        RemoveMenu(menu, 0, MF_BYPOSITION);
-        DestroyMenu(menu);
-        sanitize_task_manager_menu(popup, self.stats.processor_count as usize);
-        popup
+        // 弹出菜单构造也统一复用运行时菜单系统。
+        build_popup_menu(resource_id, self.stats.processor_count as usize).unwrap_or(null_mut())
     }
 
     unsafe fn on_tray_notification(&mut self, lparam: LPARAM) {
         // 托盘图标承担“恢复窗口”和“快速菜单”两个入口，所以这里单独处理鼠标消息。
         match lparam as u32 {
-            windows_sys::Win32::UI::WindowsAndMessaging::WM_LBUTTONDBLCLK => self.show_running_instance(),
+            windows_sys::Win32::UI::WindowsAndMessaging::WM_LBUTTONDBLCLK => {
+                self.show_running_instance()
+            }
             WM_RBUTTONDOWN => {
                 let popup = self.load_popup_menu(IDR_TRAYMENU);
                 if !popup.is_null() {
@@ -998,9 +1088,9 @@ impl App {
                     GetCursorPos(&mut cursor);
 
                     if IsWindowVisible(self.main_hwnd) != 0 {
-                        DeleteMenu(popup, IDM_RESTORETASKMAN as u32, MF_BYCOMMAND);
+                        DeleteMenu(popup, u32::from(IDM_RESTORETASKMAN), MF_BYCOMMAND);
                     } else {
-                        SetMenuDefaultItem(popup, IDM_RESTORETASKMAN as u32, 0);
+                        SetMenuDefaultItem(popup, u32::from(IDM_RESTORETASKMAN), 0);
                     }
 
                     self.check_menu(popup, IDM_ALWAYSONTOP, self.options.always_on_top());
@@ -1037,8 +1127,8 @@ impl App {
             return 0;
         }
 
-        let mut item_id = loword(wparam) as u32;
-        let flags = hiword(wparam) as u32;
+        let mut item_id = u32::from(loword(wparam));
+        let flags = u32::from(hiword(wparam));
         let menu = lparam as HMENU;
 
         if (item_id == 0xFFFF && menu.is_null()) || (flags & (MF_SYSMENU | MF_SEPARATOR)) != 0 {
@@ -1060,7 +1150,9 @@ impl App {
             }
         }
 
-        let status_text = load_string(self.hinstance, item_id);
+        let status_text = menu_status_help(item_id as u16)
+            .map(str::to_string)
+            .unwrap_or_else(|| load_string(self.hinstance, item_id));
         let status_wide = to_wide_null(&status_text);
         self.menu_tracking = true;
         SendMessageW(
@@ -1080,11 +1172,13 @@ impl App {
     }
 
     unsafe fn on_init_menu(&mut self) -> isize {
+        // 菜单刚弹出时先标记“暂时不能隐藏窗口”，避免右键隐藏逻辑误触发。
         self.cant_hide = true;
         0
     }
 
     unsafe fn on_popup_state(&mut self, active: bool) -> isize {
+        // 记录当前是否正处于弹出菜单交互期。
         self.in_popup = active;
         0
     }
@@ -1129,24 +1223,20 @@ impl App {
         }
 
         let run_file_dlg = match GetProcAddress(shell32, 61usize as *const u8) {
-            Some(proc_address) => transmute::<unsafe extern "system" fn() -> isize, RunFileDialogFn>(proc_address),
+            Some(proc_address) => {
+                transmute::<unsafe extern "system" fn() -> isize, RunFileDialogFn>(proc_address)
+            }
             None => {
                 FreeLibrary(shell32);
                 return false;
             }
         };
 
-        let mut current_dir = to_wide_null(&env::current_dir().unwrap_or_default().to_string_lossy());
+        let mut current_dir =
+            to_wide_null(&env::current_dir().unwrap_or_default().to_string_lossy());
         let mut title = to_wide_null(&load_string(self.hinstance, IDS_RUNTITLE));
         let mut prompt = to_wide_null(&load_string(self.hinstance, IDS_RUNTEXT));
-        let icon = LoadImageW(
-            self.hinstance,
-            make_int_resource(IDI_MAIN),
-            IMAGE_ICON,
-            0,
-            0,
-            LR_DEFAULTCOLOR | LR_DEFAULTSIZE,
-        );
+        let icon = load_icon_from_file("main.ico", 0, 0, LR_DEFAULTCOLOR | LR_DEFAULTSIZE);
 
         let shown = if !icon.is_null() {
             run_file_dlg(
@@ -1228,19 +1318,19 @@ impl App {
                 self.update_menu_states();
             }
             IDM_LARGEICONS | IDM_SMALLICONS | IDM_DETAILS => {
-                self.options.view_mode = (command_id - VM_FIRST) as i32;
+                self.options.view_mode = i32::from(command_id - VM_FIRST);
                 self.update_menu_states();
                 self.refresh_task_page();
             }
             IDM_ALLCPUS | IDM_MULTIGRAPH => {
-                self.options.cpu_history_mode = (command_id - CM_FIRST) as i32;
+                self.options.cpu_history_mode = i32::from(command_id - CM_FIRST);
                 self.refresh_performance_page();
                 self.update_menu_states();
             }
             IDM_HIGH | IDM_NORMAL | IDM_LOW | IDM_PAUSED => {
                 const TIMER_DELAYS: [u32; 4] = [500, 2000, 4000, 0];
 
-                self.options.update_speed = (command_id - US_FIRST) as i32;
+                self.options.update_speed = i32::from(command_id - US_FIRST);
                 let timer_delay = TIMER_DELAYS[self.options.update_speed as usize];
                 self.options.timer_interval = timer_delay;
 
@@ -1256,7 +1346,7 @@ impl App {
             }
             IDM_ABOUT => {
                 let title = to_wide_null(&self.strings.app_title);
-                let icon = LoadIconW(self.hinstance, make_int_resource(IDI_MAIN));
+                let icon = load_icon_from_file("main.ico", 0, 0, LR_DEFAULTCOLOR | LR_DEFAULTSIZE);
                 if !icon.is_null() {
                     ShellAboutW(hwnd, title.as_ptr(), null(), icon);
                     DestroyIcon(icon);
@@ -1277,9 +1367,13 @@ impl App {
             | IDM_AFFINITY
             | IDM_PROC_DEBUG
             | IDM_PROC_TERMINATE
+            | IDM_PROC_ENDTREE
+            | IDM_PROC_OPENFILELOCATION
             | IDM_PROC_REALTIME
             | IDM_PROC_HIGH
+            | IDM_PROC_ABOVENORMAL
             | IDM_PROC_NORMAL
+            | IDM_PROC_BELOWNORMAL
             | IDM_PROC_LOW => {
                 if self.options.current_page == PROC_PAGE as i32 {
                     let _ = self.pages[PROC_PAGE]
@@ -1341,10 +1435,10 @@ impl App {
 
     unsafe fn on_notify(&mut self, lparam: LPARAM) -> isize {
         let header = &*(lparam as *const NMHDR);
-        if header.idFrom as i32 == IDC_TABS && header.code == TCN_SELCHANGE as u32 {
+        if header.idFrom as i32 == IDC_TABS && header.code == TCN_SELCHANGE {
             let tabs_hwnd = GetDlgItem(self.main_hwnd, IDC_TABS);
             let selected = SendMessageW(tabs_hwnd, TCM_GETCURSEL, 0, 0) as usize;
-            return self.activate_page(selected) as isize;
+            return isize::from(self.activate_page(selected));
         }
 
         0
@@ -1360,7 +1454,7 @@ impl App {
 
         SendMessageW(tabs_hwnd, TCM_SETCURSEL, PROC_PAGE, 0);
         if self.activate_page(PROC_PAGE) {
-            self.pages[PROC_PAGE].find_process(thread_id, pid) as isize
+            isize::from(self.pages[PROC_PAGE].find_process(thread_id, pid))
         } else {
             MessageBeep(0);
             0
@@ -1395,17 +1489,24 @@ unsafe fn adjusted_tab_page_rect(tabs_hwnd: HWND, owner_hwnd: HWND) -> RECT {
     // Tab 控件的客户区需要通过 `TCM_ADJUSTRECT` 扣掉页签边框后，才能得到真正的页面矩形。
     let mut page_rect = zeroed::<RECT>();
     GetClientRect(tabs_hwnd, &mut page_rect);
-    SendMessageW(tabs_hwnd, TCM_ADJUSTRECT, 0, &mut page_rect as *mut _ as LPARAM);
+    SendMessageW(
+        tabs_hwnd,
+        TCM_ADJUSTRECT,
+        0,
+        &mut page_rect as *mut _ as LPARAM,
+    );
     MapWindowPoints(tabs_hwnd, owner_hwnd, &mut page_rect as *mut _ as _, 2);
     page_rect
 }
 
 fn framed_window_style(current_style: u32) -> u32 {
+    // 把当前样式收敛到带标题栏/系统菜单的经典有框窗口形态。
     let preserved_style_bits = current_style & !(WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_DLGFRAME);
     preserved_style_bits | WS_TILEDWINDOW
 }
 
 fn borderless_window_style(framed_style: u32) -> u32 {
+    // 从有框样式中剥离标题栏相关位，得到无标题模式。
     framed_style & !(WS_DLGFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
 }
 
@@ -1417,14 +1518,24 @@ unsafe extern "system" fn main_window_proc(
 ) -> isize {
     // 主窗口过程只做最薄的一层 Win32 消息路由，
     // 具体行为统一委托给 `App`，避免消息逻辑散落在全局回调里。
-    let application = app();
+    if msg == WM_INITDIALOG {
+        let app_ptr = lparam as *mut App;
+        if app_ptr.is_null() {
+            return 0;
+        }
+        set_window_userdata_ptr(hwnd, app_ptr);
+        return (*app_ptr).on_init_dialog(hwnd);
+    }
+
+    let Some(application) = app_from_hwnd(hwnd) else {
+        return 0;
+    };
 
     if msg == WM_SIZE || msg == WM_MOVE {
         application.record_window_rect(hwnd);
     }
 
     match msg {
-        WM_INITDIALOG => application.on_init_dialog(hwnd),
         WM_SIZE => {
             let width_px = (lparam & 0xFFFF) as i32;
             let height_px = ((lparam >> 16) & 0xFFFF) as i32;
@@ -1462,7 +1573,8 @@ unsafe extern "system" fn main_window_proc(
         }
         WM_NCHITTEST => {
             let mut result = DefWindowProcW(hwnd, msg, wparam, lparam);
-            if application.options.no_title() && result == HTCLIENT as isize && IsZoomed(hwnd) == 0 {
+            if application.options.no_title() && result == HTCLIENT as isize && IsZoomed(hwnd) == 0
+            {
                 result = HTCAPTION as isize;
             }
             set_dialog_msg_result(hwnd, result);
@@ -1475,40 +1587,11 @@ unsafe extern "system" fn main_window_proc(
             if !application.options.no_title() {
                 return 0;
             }
-            // Fall through to WM_LBUTTONDBLCLK logic
-            application.options.set_no_title(!application.options.no_title());
-            application.apply_options_to_pages();
-            application.refresh_performance_page();
-            application.update_menu_states();
-            let mut window_rect = zeroed::<RECT>();
-            GetWindowRect(hwnd, &mut window_rect);
-            MoveWindow(
-                hwnd,
-                window_rect.left,
-                window_rect.top,
-                width(&window_rect),
-                height(&window_rect),
-                1,
-            );
-            application.size_active_page();
+            application.toggle_no_title_mode();
             0
         }
         WM_LBUTTONDBLCLK => {
-            application.options.set_no_title(!application.options.no_title());
-            application.apply_options_to_pages();
-            application.refresh_performance_page();
-            application.update_menu_states();
-            let mut window_rect = zeroed::<RECT>();
-            GetWindowRect(hwnd, &mut window_rect);
-            MoveWindow(
-                hwnd,
-                window_rect.left,
-                window_rect.top,
-                width(&window_rect),
-                height(&window_rect),
-                1,
-            );
-            application.size_active_page();
+            application.toggle_no_title_mode();
             0
         }
         WM_ENDSESSION => {
@@ -1523,6 +1606,7 @@ unsafe extern "system" fn main_window_proc(
         }
         WM_DESTROY => {
             application.shutdown();
+            set_window_userdata_ptr::<App>(hwnd, null_mut());
             0
         }
         _ => 0,
@@ -1530,7 +1614,8 @@ unsafe extern "system" fn main_window_proc(
 }
 
 fn filetime_to_u64(filetime: FILETIME) -> u64 {
-    ((filetime.dwHighDateTime as u64) << 32) | filetime.dwLowDateTime as u64
+    // `FILETIME` 在 Win32 里是两个 32 位字段，这里统一转成便于计算的 `u64`。
+    (u64::from(filetime.dwHighDateTime) << 32) | u64::from(filetime.dwLowDateTime)
 }
 
 unsafe fn process_count() -> u32 {

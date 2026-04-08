@@ -4,6 +4,7 @@ use super::text_key::TextKey;
 use crate::resource::*;
 
 pub fn resource(id: u32) -> &'static str {
+    // 旧式资源 ID 到葡萄牙语字符串的映射表。
     match id {
         IDS_PERFPAGETITLE => "Desempenho",
         IDS_NETPAGETITLE => "Rede",
@@ -68,6 +69,7 @@ pub fn resource(id: u32) -> &'static str {
 }
 
 pub fn text(key: TextKey) -> &'static str {
+    // 新的声明式文本键到葡萄牙语字符串的映射表。
     match key {
         TextKey::File => "&Arquivo",
         TextKey::Options => "&Opções",
@@ -106,11 +108,14 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::OneGraphAllCpus => "Um gráfico, &todas as CPUs",
         TextKey::OneGraphPerCpu => "Um gráfico &por CPU",
         TextKey::ShowKernelTimes => "Mostrar tempos do &kernel",
-        TextKey::NoTitle => "&Sem título",
         TextKey::RestoreTaskManager => "&Restaurar o Gerenciador de Tarefas",
         TextKey::SwitchTo => "&Alternar para",
         TextKey::EndTask => "&Finalizar tarefa",
         TextKey::EndProcess => "&Finalizar processo",
+        TextKey::EndProcessTree
+        | TextKey::OpenFileLocation
+        | TextKey::AboveNormal
+        | TextKey::BelowNormal => super::en_us::text(key),
         TextKey::Debug => "&Depurar",
         TextKey::SetPriority => "Definir &prioridade",
         TextKey::Realtime => "&Tempo real",
@@ -124,9 +129,6 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::Logoff => "&Logoff",
         TextKey::SendMessage => "&Enviar mensagem...",
         TextKey::TaskManager => "Gerenciador de Tarefas",
-        TextKey::Tasks => "Aplicativos",
-        TextKey::Processes => "Processos",
-        TextKey::Users => "Usuários",
         TextKey::Handles => "Handles",
         TextKey::Threads => "Threads",
         TextKey::ProcessesLabel => "Processos",
@@ -170,6 +172,10 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::NotResponding => "Nao esta respondendo",
         TextKey::Running => "Em execucao",
         TextKey::MessageCouldNotBeSent => "Nao foi possivel enviar a mensagem.",
+        TextKey::UnableToOpenFileLocation
+        | TextKey::KillProcessTreePrompt
+        | TextKey::KillProcessTreeFailed
+        | TextKey::KillProcessTreeFailedBody => super::en_us::text(key),
         TextKey::ConfirmLogoffSelectedUsers => {
             "Tem certeza de que deseja fazer logoff dos usuarios selecionados?"
         }
@@ -196,8 +202,6 @@ pub fn text(key: TextKey) -> &'static str {
         TextKey::BytesSent => "Bytes enviados",
         TextKey::BytesReceived => "Bytes recebidos",
         TextKey::BytesTotal => "Total de bytes",
-        TextKey::Recv => "Rec.",
-        TextKey::Sent => "Env.",
         TextKey::Connected => "Conectado",
         TextKey::Disconnected => "Desconectado",
         TextKey::Connecting => "Conectando",

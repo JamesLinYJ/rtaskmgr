@@ -1,4 +1,5 @@
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
+use std::collections::{HashMap, HashSet};
 
 // 应用页实现。
 // 该模块枚举顶层窗口，将其映射为任务列表中的行，并提供切换、平铺、
@@ -11,52 +12,52 @@ use std::thread::{self, JoinHandle};
 use windows_sys::Win32::Foundation::{BOOL, HANDLE, HINSTANCE, HWND, LPARAM, RECT};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
 use windows_sys::Win32::System::StationsAndDesktops::{
-    CloseDesktop, CloseWindowStation, EnumDesktopWindows, EnumDesktopsW, EnumWindowStationsW,
-    GetProcessWindowStation, GetThreadDesktop, GetUserObjectInformationW, OpenDesktopW,
-    OpenWindowStationW, SetProcessWindowStation, DESKTOP_ENUMERATE, DESKTOP_READOBJECTS, UOI_NAME,
+    CloseDesktop, EnumDesktopWindows, EnumDesktopsW, GetProcessWindowStation, GetThreadDesktop,
+    GetUserObjectInformationW, OpenDesktopW, DESKTOP_ENUMERATE, DESKTOP_READOBJECTS, UOI_NAME,
 };
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Controls::{
     ImageList_Create, ImageList_Destroy, ImageList_Remove, ImageList_ReplaceIcon, HIMAGELIST,
-    LVCFMT_LEFT, LVCF_FMT, LVCF_SUBITEM, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_IMAGE,
-    LVIF_PARAM, LVIF_STATE, LVIF_TEXT, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVN_COLUMNCLICK,
-    LVN_GETDISPINFOW, LVN_ITEMCHANGED, LVNI_SELECTED, LVM_DELETEALLITEMS, LVM_DELETECOLUMN,
-    LVM_DELETEITEM, LVM_GETITEMCOUNT, LVM_GETITEMW, LVM_GETNEXTITEM, LVM_GETSELECTEDCOUNT,
-    LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_REDRAWITEMS, LVM_SETIMAGELIST, LVM_SETITEMW,
-    LVSIL_NORMAL, LVSIL_SMALL, LVS_AUTOARRANGE, LVS_ICON, LVS_REPORT, LVS_SHOWSELALWAYS,
-    LVS_SMALLICON, LVS_TYPEMASK, NMHDR, NMLISTVIEW, NMLVDISPINFOW, NM_DBLCLK,
+    LVCFMT_LEFT, LVCF_FMT, LVCF_SUBITEM, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_IMAGE, LVIF_PARAM,
+    LVIF_STATE, LVIF_TEXT, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVM_DELETEALLITEMS,
+    LVM_DELETECOLUMN, LVM_DELETEITEM, LVM_GETITEMCOUNT, LVM_GETITEMW, LVM_GETNEXTITEM,
+    LVM_GETSELECTEDCOUNT, LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_REDRAWITEMS, LVM_SETIMAGELIST,
+    LVM_SETITEMW, LVNI_SELECTED, LVN_COLUMNCLICK, LVN_GETDISPINFOW, LVN_ITEMCHANGED, LVSIL_NORMAL,
+    LVSIL_SMALL, LVS_AUTOARRANGE, LVS_ICON, LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SMALLICON,
+    LVS_TYPEMASK, NMHDR, NMLISTVIEW, NMLVDISPINFOW, NM_DBLCLK,
 };
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyState;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    EnableWindow, GetKeyState, SetFocus, VK_CONTROL,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BeginDeferWindowPos, CascadeWindows, CheckMenuRadioItem, CopyIcon, DeferWindowPos, DestroyIcon,
-    DestroyMenu, DrawMenuBar, EnableMenuItem, EndDeferWindowPos, GCL_HICON, GCL_HICONSM,
-    GetClassLongPtrW, GetClientRect, GetDesktopWindow, GetDlgItem, GetSubMenu, GetWindow,
-    GetWindowLongW, GetWindowThreadProcessId, HICON, InternalGetWindowText, IsHungAppWindow,
-    IsIconic, IsWindowVisible, LoadImageW,
-    LoadMenuW, PostMessageW, RemoveMenu, SendMessageTimeoutW, SendMessageW, SetForegroundWindow,
-    SetMenuDefaultItem, SetWindowLongW, SetWindowPos, ShowWindow, ShowWindowAsync, TileWindows,
-    TrackPopupMenuEx, IMAGE_ICON, MF_BYCOMMAND, MF_BYPOSITION, MF_DISABLED, MF_GRAYED,
-    MDITILE_HORIZONTAL, MDITILE_VERTICAL, SMTO_ABORTIFHUNG, SMTO_BLOCK, SW_MAXIMIZE,
-    SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    TPM_RETURNCMD, WM_COMMAND, WM_ENABLE, WM_GETICON, WM_SETREDRAW,
+    DestroyMenu, DrawMenuBar, EnableMenuItem, EndDeferWindowPos, GetClassLongPtrW, GetClientRect,
+    GetDesktopWindow, GetDlgItem, GetWindow, GetWindowLongW, GetWindowThreadProcessId,
+    InternalGetWindowText, IsHungAppWindow, IsIconic, IsWindowVisible, PostMessageW,
+    SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetMenuDefaultItem, SetWindowLongW,
+    SetWindowPos, ShowWindow, ShowWindowAsync, TileWindows, TrackPopupMenuEx, GCL_HICON,
+    GCL_HICONSM, HICON, MDITILE_HORIZONTAL, MDITILE_VERTICAL, MF_BYCOMMAND, MF_DISABLED, MF_GRAYED,
+    SMTO_ABORTIFHUNG, SMTO_BLOCK, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, TPM_RETURNCMD, WM_COMMAND, WM_GETICON, WM_SETREDRAW,
 };
 
+use crate::assets::load_icon_from_file;
+use crate::language::{text, TextKey};
+use crate::menus::build_popup_menu;
 use crate::options::{Options, ViewMode};
 use crate::resource::{
-    IDC_CASCADE, IDC_ENDTASK, IDC_MAXIMIZE, IDC_MINIMIZE, IDC_SWITCHTO, IDC_TASKLIST,
-    IDC_TILEHORZ, IDC_TILEVERT, IDI_DEFAULT, IDM_DETAILS, IDM_LARGEICONS, IDM_RUN,
-    IDM_SMALLICONS, IDM_TASK_BRINGTOFRONT, IDM_TASK_CASCADE, IDM_TASK_ENDTASK,
-    IDM_TASK_FINDPROCESS, IDM_TASK_MAXIMIZE, IDM_TASK_MINIMIZE, IDM_TASK_SWITCHTO,
-    IDM_TASK_TILEHORZ, IDM_TASK_TILEVERT, IDR_TASK_CONTEXT, IDR_TASKVIEW, IDS_COL_TASKDESKTOP,
-    IDS_COL_TASKNAME, IDS_COL_TASKSTATUS, IDS_COL_TASKWINSTATION,
+    IDC_CASCADE, IDC_ENDTASK, IDC_MAXIMIZE, IDC_MINIMIZE, IDC_SWITCHTO, IDC_TASKLIST, IDC_TILEHORZ,
+    IDC_TILEVERT, IDM_DETAILS, IDM_LARGEICONS, IDM_RUN, IDM_SMALLICONS, IDM_TASK_BRINGTOFRONT,
+    IDM_TASK_CASCADE, IDM_TASK_ENDTASK, IDM_TASK_FINDPROCESS, IDM_TASK_MAXIMIZE, IDM_TASK_MINIMIZE,
+    IDM_TASK_SWITCHTO, IDM_TASK_TILEHORZ, IDM_TASK_TILEVERT, IDR_TASKVIEW, IDR_TASK_CONTEXT,
+    IDS_COL_TASKDESKTOP, IDS_COL_TASKNAME, IDS_COL_TASKSTATUS, IDS_COL_TASKWINSTATION,
 };
-use crate::localization::{localize_menu, text, TextKey};
 use crate::winutil::{
-    append_32_bit_suffix, is_32_bit_process_pid, load_string, make_int_resource,
-    finish_list_view_update, sanitize_task_manager_menu, subclass_list_view, to_wide_null,
+    append_32_bit_suffix, finish_list_view_update, is_32_bit_process_pid, load_string,
+    subclass_list_view, to_wide_null,
 };
 const TASK_COLUMNS: [TaskColumn; 4] = [
+    // 应用程序页默认只展示经典任务管理器里的四列。
     TaskColumn::new(IDS_COL_TASKNAME, 250),
     TaskColumn::new(IDS_COL_TASKSTATUS, 97),
     TaskColumn::new(IDS_COL_TASKWINSTATION, 70),
@@ -64,12 +65,12 @@ const TASK_COLUMNS: [TaskColumn; 4] = [
 ];
 
 const ACTIVE_COLUMNS: [TaskColumnId; 2] = [TaskColumnId::Name, TaskColumnId::Status];
+// 图标拉取放在后台线程里，避免顶层窗口枚举时阻塞 UI。
 const ICON_FETCH_TIMEOUT_MS: u32 = 100;
 const ICON_SMALL: usize = 0;
 const ICON_BIG: usize = 1;
 const ICON_SMALL2: usize = 2;
 const DEFAULT_MARGIN: i32 = 8;
-const MAXIMUM_ALLOWED_ACCESS: u32 = 0x0200_0000;
 const TEXT_CALLBACK_WIDE: *mut u16 = -1isize as *mut u16;
 
 #[link(name = "user32")]
@@ -87,6 +88,7 @@ pub enum TaskColumnId {
 
 #[derive(Clone, Copy)]
 struct TaskColumn {
+    // 任务页列定义比进程页更简单，只需要标题和宽度。
     title_id: u32,
     width: i32,
 }
@@ -99,6 +101,7 @@ impl TaskColumn {
 
 #[derive(Clone)]
 pub struct TaskEntry {
+    // `TaskEntry` 代表一个顶层窗口/任务，并附带图标索引和脏列状态。
     pub hwnd: HWND,
     pub title: String,
     pub is_32_bit: bool,
@@ -112,6 +115,7 @@ pub struct TaskEntry {
 }
 
 struct WorkerTaskEntry {
+    // 后台线程只返回与 UI 无关的纯数据，避免跨线程传递 GDI/窗口资源。
     hwnd: isize,
     title: String,
     is_32_bit: bool,
@@ -121,6 +125,7 @@ struct WorkerTaskEntry {
 }
 
 enum WorkerCommand {
+    // 后台线程当前只负责枚举任务窗口和有序退出。
     Collect {
         main_hwnd: isize,
         reply: Sender<Vec<WorkerTaskEntry>>,
@@ -130,6 +135,7 @@ enum WorkerCommand {
 
 impl TaskEntry {
     fn status_text(&self) -> &'static str {
+        // 任务状态在当前实现里只区分“响应”和“未响应”两种。
         if self.is_hung {
             text(TextKey::NotResponding)
         } else {
@@ -183,7 +189,7 @@ impl Default for TaskPageState {
             hinstance: null_mut(),
             hwnd_page: null_mut(),
             main_hwnd: null_mut(),
-            tasks: Vec::new(),
+            tasks: Vec::with_capacity(128),
             small_icons: 0,
             large_icons: 0,
             default_small_icon: null_mut(),
@@ -211,7 +217,11 @@ impl TaskPageState {
         self.no_title
     }
 
-    pub unsafe fn prepare_initialize(&mut self, hinstance: HINSTANCE, main_hwnd: HWND) -> Result<(), u32> {
+    pub unsafe fn prepare_initialize(
+        &mut self,
+        hinstance: HINSTANCE,
+        main_hwnd: HWND,
+    ) -> Result<(), u32> {
         // 任务页真正创建窗口前，先把后台枚举线程和图标列表资源准备好，
         // 避免页面显示出来后才临时分配这些较重的对象。
         self.hinstance = hinstance;
@@ -244,10 +254,8 @@ impl TaskPageState {
             return Err(windows_sys::Win32::Foundation::GetLastError());
         }
 
-        self.default_small_icon = LoadImageW(
-            self.hinstance,
-            make_int_resource(IDI_DEFAULT),
-            IMAGE_ICON,
+        self.default_small_icon = load_icon_from_file(
+            "default.ico",
             windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
                 windows_sys::Win32::UI::WindowsAndMessaging::SM_CXSMICON,
             ),
@@ -255,11 +263,9 @@ impl TaskPageState {
                 windows_sys::Win32::UI::WindowsAndMessaging::SM_CYSMICON,
             ),
             0,
-        ) as HICON;
-        self.default_large_icon = LoadImageW(
-            self.hinstance,
-            make_int_resource(IDI_DEFAULT),
-            IMAGE_ICON,
+        );
+        self.default_large_icon = load_icon_from_file(
+            "default.ico",
             windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
                 windows_sys::Win32::UI::WindowsAndMessaging::SM_CXICON,
             ),
@@ -267,7 +273,7 @@ impl TaskPageState {
                 windows_sys::Win32::UI::WindowsAndMessaging::SM_CYICON,
             ),
             0,
-        ) as HICON;
+        );
         if self.default_small_icon.is_null() || self.default_large_icon.is_null() {
             return Err(windows_sys::Win32::Foundation::GetLastError());
         }
@@ -283,9 +289,16 @@ impl TaskPageState {
         let list_hwnd = self.list_hwnd();
         if !list_hwnd.is_null() {
             subclass_list_view(list_hwnd);
-            SendMessageW(list_hwnd, LVM_SETIMAGELIST, LVSIL_SMALL as usize, self.small_icons);
-            let current_style =
-                GetWindowLongW(list_hwnd, windows_sys::Win32::UI::WindowsAndMessaging::GWL_STYLE) as u32;
+            SendMessageW(
+                list_hwnd,
+                LVM_SETIMAGELIST,
+                LVSIL_SMALL as usize,
+                self.small_icons,
+            );
+            let current_style = GetWindowLongW(
+                list_hwnd,
+                windows_sys::Win32::UI::WindowsAndMessaging::GWL_STYLE,
+            ) as u32;
             SetWindowLongW(
                 list_hwnd,
                 windows_sys::Win32::UI::WindowsAndMessaging::GWL_STYLE,
@@ -316,6 +329,7 @@ impl TaskPageState {
     }
 
     pub unsafe fn timer_event(&mut self, options: &Options) {
+        // 刷新任务列表时会先取后台采集结果，再做排序和最小重绘提交。
         self.apply_options(options);
         if !self.paused {
             self.refresh_tasks();
@@ -358,7 +372,7 @@ impl TaskPageState {
             }
             code if code == LVN_ITEMCHANGED => {
                 let notify = &*(lparam as *const NMLISTVIEW);
-                if (notify.uChanged & LVIF_STATE as u32) != 0 {
+                if (notify.uChanged & LVIF_STATE) != 0 {
                     let selected_count = self.selected_count();
                     if selected_count != self.selected_count {
                         self.selected_count = selected_count;
@@ -424,7 +438,15 @@ impl TaskPageState {
                 let hwnds = self.selected_hwnds(true);
                 self.ensure_not_minimized(&hwnds);
                 for hwnd in hwnds.iter().rev().copied() {
-                    SetWindowPos(hwnd, windows_sys::Win32::UI::WindowsAndMessaging::HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                    SetWindowPos(
+                        hwnd,
+                        windows_sys::Win32::UI::WindowsAndMessaging::HWND_TOP,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE,
+                    );
                 }
                 if let Some(first) = hwnds.first().copied() {
                     SetForegroundWindow(first);
@@ -436,7 +458,7 @@ impl TaskPageState {
                 }
             }
             id if id == IDM_TASK_ENDTASK || id == IDC_ENDTASK as u16 => {
-                let force = (GetKeyState(windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_CONTROL as i32) & (1 << 15)) != 0;
+                let force = (GetKeyState(i32::from(VK_CONTROL)) & (1 << 15)) != 0;
                 for hwnd in self.selected_hwnds(true) {
                     EndTask(hwnd, 0, if force { 1 } else { 0 });
                 }
@@ -446,7 +468,12 @@ impl TaskPageState {
                     let mut pid = 0u32;
                     let thread_id = GetWindowThreadProcessId(hwnd, &mut pid);
                     if pid != 0 {
-                        PostMessageW(self.main_hwnd, crate::resource::WM_FINDPROC, thread_id as usize, pid as isize);
+                        PostMessageW(
+                            self.main_hwnd,
+                            crate::resource::WM_FINDPROC,
+                            thread_id as usize,
+                            pid as isize,
+                        );
                     }
                 }
             }
@@ -479,30 +506,27 @@ impl TaskPageState {
             };
             CheckMenuRadioItem(
                 popup,
-                IDM_LARGEICONS as u32,
-                IDM_DETAILS as u32,
-                checked_id as u32,
+                u32::from(IDM_LARGEICONS),
+                u32::from(IDM_DETAILS),
+                u32::from(checked_id),
                 MF_BYCOMMAND,
             );
         } else {
-            SetMenuDefaultItem(popup, IDM_TASK_SWITCHTO as u32, 0);
+            SetMenuDefaultItem(popup, u32::from(IDM_TASK_SWITCHTO), 0);
             if selected_hwnds.len() < 2 {
                 for command_id in [IDM_TASK_CASCADE, IDM_TASK_TILEHORZ, IDM_TASK_TILEVERT] {
-                    EnableMenuItem(popup, command_id as u32, MF_BYCOMMAND | MF_GRAYED | MF_DISABLED);
+                    EnableMenuItem(
+                        popup,
+                        u32::from(command_id),
+                        MF_BYCOMMAND | MF_GRAYED | MF_DISABLED,
+                    );
                 }
             }
         }
 
         self.paused = true;
         SendMessageW(self.main_hwnd, crate::resource::PWM_INPOPUP, 1, 0);
-        let command = TrackPopupMenuEx(
-            popup,
-            TPM_RETURNCMD,
-            x,
-            y,
-            self.hwnd_page,
-            null(),
-        );
+        let command = TrackPopupMenuEx(popup, TPM_RETURNCMD, x, y, self.hwnd_page, null());
         SendMessageW(self.main_hwnd, crate::resource::PWM_INPOPUP, 0, 0);
         DestroyMenu(popup);
 
@@ -522,7 +546,7 @@ impl TaskPageState {
             return;
         }
 
-        let master_hwnd = GetDlgItem(self.hwnd_page, IDM_RUN as i32);
+        let master_hwnd = GetDlgItem(self.hwnd_page, i32::from(IDM_RUN));
         let list_hwnd = self.list_hwnd();
         if master_hwnd.is_null() || list_hwnd.is_null() {
             return;
@@ -547,7 +571,7 @@ impl TaskPageState {
             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
 
-        for control_id in [IDC_SWITCHTO, IDC_ENDTASK, IDM_RUN as i32] {
+        for control_id in [IDC_SWITCHTO, IDC_ENDTASK, i32::from(IDM_RUN)] {
             let control_hwnd = GetDlgItem(self.hwnd_page, control_id);
             if control_hwnd.is_null() {
                 continue;
@@ -595,7 +619,13 @@ impl TaskPageState {
                 iSubItem: index as i32,
                 ..zeroed()
             };
-            if SendMessageW(list_hwnd, LVM_INSERTCOLUMNW, index, &mut lv_column as *mut _ as LPARAM) == -1 {
+            if SendMessageW(
+                list_hwnd,
+                LVM_INSERTCOLUMNW,
+                index,
+                &mut lv_column as *mut _ as LPARAM,
+            ) == -1
+            {
                 return Err(windows_sys::Win32::Foundation::ERROR_GEN_FAILURE);
             }
         }
@@ -607,8 +637,10 @@ impl TaskPageState {
         self.current_view_mode = view_mode;
 
         let list_hwnd = self.list_hwnd();
-        let current_style =
-            GetWindowLongW(list_hwnd, windows_sys::Win32::UI::WindowsAndMessaging::GWL_STYLE) as u32;
+        let current_style = GetWindowLongW(
+            list_hwnd,
+            windows_sys::Win32::UI::WindowsAndMessaging::GWL_STYLE,
+        ) as u32;
         let new_style = (current_style & !LVS_TYPEMASK)
             | if view_mode == ViewMode::SmallIcon as i32 {
                 LVS_SMALLICON | LVS_AUTOARRANGE
@@ -645,11 +677,15 @@ impl TaskPageState {
         // 任务刷新采用“枚举窗口 -> 合并已有条目 -> 删除过期条目 -> 刷新 ListView”。
         // 这样可以尽量复用已有行，减少窗口切换时的闪烁。
         let current_pass = self.pass_count;
+        let mut task_index_by_hwnd = HashMap::with_capacity(self.tasks.len());
+        for (index, task) in self.tasks.iter().enumerate() {
+            task_index_by_hwnd.insert(task.hwnd as isize, index);
+        }
 
         for worker_task in self.collect_tasks() {
             let hwnd = worker_task.hwnd as HWND;
-            if let Some(task) = self.tasks.iter_mut().find(|task| task.hwnd == hwnd) {
-                update_task_entry(task, &worker_task, current_pass);
+            if let Some(&index) = task_index_by_hwnd.get(&worker_task.hwnd) {
+                update_task_entry(&mut self.tasks[index], &worker_task, current_pass);
             } else {
                 let small_icon = add_icon(
                     self.small_icons,
@@ -667,6 +703,7 @@ impl TaskPageState {
                     large_icon,
                     current_pass,
                 ));
+                task_index_by_hwnd.insert(hwnd as isize, self.tasks.len() - 1);
             }
         }
 
@@ -676,8 +713,45 @@ impl TaskPageState {
     }
 
     fn resort_tasks(&mut self) {
-        self.tasks
-            .sort_by(|left, right| compare_tasks(left, right, self.sort_column, self.sort_direction));
+        match self.sort_column {
+            TaskColumnId::Name => {
+                if self.sort_direction < 0 {
+                    self.tasks.sort_by_cached_key(|task| {
+                        Reverse((task.title.to_lowercase(), task.hwnd as usize))
+                    });
+                } else {
+                    self.tasks
+                        .sort_by_cached_key(|task| (task.title.to_lowercase(), task.hwnd as usize));
+                }
+            }
+            TaskColumnId::Winstation => {
+                if self.sort_direction < 0 {
+                    self.tasks.sort_by_cached_key(|task| {
+                        Reverse((task.winstation.to_lowercase(), task.hwnd as usize))
+                    });
+                } else {
+                    self.tasks.sort_by_cached_key(|task| {
+                        (task.winstation.to_lowercase(), task.hwnd as usize)
+                    });
+                }
+            }
+            TaskColumnId::Desktop => {
+                if self.sort_direction < 0 {
+                    self.tasks.sort_by_cached_key(|task| {
+                        Reverse((task.desktop.to_lowercase(), task.hwnd as usize))
+                    });
+                } else {
+                    self.tasks.sort_by_cached_key(|task| {
+                        (task.desktop.to_lowercase(), task.hwnd as usize)
+                    });
+                }
+            }
+            TaskColumnId::Status => {
+                self.tasks.sort_by(|left, right| {
+                    compare_tasks(left, right, self.sort_column, self.sort_direction)
+                });
+            }
+        }
     }
 
     fn start_worker_thread(&mut self) {
@@ -780,7 +854,13 @@ impl TaskPageState {
                 iItem: index as i32,
                 ..zeroed()
             };
-            let current_hwnd = if SendMessageW(list_hwnd, LVM_GETITEMW, 0, &mut current_item as *mut _ as LPARAM) != 0 {
+            let current_hwnd = if SendMessageW(
+                list_hwnd,
+                LVM_GETITEMW,
+                0,
+                &mut current_item as *mut _ as LPARAM,
+            ) != 0
+            {
                 Some(current_item.lParam as HWND)
             } else {
                 None
@@ -857,7 +937,11 @@ impl TaskPageState {
     }
 
     unsafe fn fill_display_info(&self, item: &mut LVITEMW) {
-        if (item.mask & LVIF_TEXT) == 0 || item.iItem < 0 || item.pszText.is_null() || item.cchTextMax <= 0 {
+        if (item.mask & LVIF_TEXT) == 0
+            || item.iItem < 0
+            || item.pszText.is_null()
+            || item.cchTextMax <= 0
+        {
             return;
         }
 
@@ -902,7 +986,7 @@ impl TaskPageState {
         for control_id in [IDC_ENDTASK, IDC_SWITCHTO] {
             let hwnd = GetDlgItem(self.hwnd_page, control_id);
             if !hwnd.is_null() {
-                SendMessageW(hwnd, WM_ENABLE, enabled as usize, 0);
+                EnableWindow(hwnd, i32::from(enabled));
             }
         }
     }
@@ -916,7 +1000,12 @@ impl TaskPageState {
         let mut hwnds = Vec::new();
         let mut last_index = -1;
         loop {
-            let next_index = SendMessageW(list_hwnd, LVM_GETNEXTITEM, last_index as usize, LVNI_SELECTED as LPARAM) as i32;
+            let next_index = SendMessageW(
+                list_hwnd,
+                LVM_GETNEXTITEM,
+                last_index as usize,
+                LVNI_SELECTED as LPARAM,
+            ) as i32;
             if next_index < 0 {
                 break;
             }
@@ -926,7 +1015,13 @@ impl TaskPageState {
                 iItem: next_index,
                 ..zeroed()
             };
-            if SendMessageW(list_hwnd, windows_sys::Win32::UI::Controls::LVM_GETITEMW, 0, &mut item as *mut _ as LPARAM) != 0 {
+            if SendMessageW(
+                list_hwnd,
+                windows_sys::Win32::UI::Controls::LVM_GETITEMW,
+                0,
+                &mut item as *mut _ as LPARAM,
+            ) != 0
+            {
                 hwnds.push(item.lParam as HWND);
             }
             last_index = next_index;
@@ -951,28 +1046,34 @@ impl TaskPageState {
     unsafe fn tile_selected(&self, how: u32) {
         let hwnds = self.selected_hwnds(self.selected_count > 0);
         self.ensure_not_minimized(&hwnds);
-        TileWindows(GetDesktopWindow(), how, null(), hwnds.len() as u32, hwnds.as_ptr());
+        TileWindows(
+            GetDesktopWindow(),
+            how,
+            null(),
+            hwnds.len() as u32,
+            hwnds.as_ptr(),
+        );
     }
 
     unsafe fn cascade_selected(&self) {
         let hwnds = self.selected_hwnds(self.selected_count > 0);
         self.ensure_not_minimized(&hwnds);
-        CascadeWindows(GetDesktopWindow(), 0, null(), hwnds.len() as u32, hwnds.as_ptr());
+        CascadeWindows(
+            GetDesktopWindow(),
+            0,
+            null(),
+            hwnds.len() as u32,
+            hwnds.as_ptr(),
+        );
     }
 }
 
-unsafe fn load_popup_menu(hinstance: HINSTANCE, resource_id: u16) -> windows_sys::Win32::UI::WindowsAndMessaging::HMENU {
-    // 和其它页面一样，弹出菜单会先局部加载，再抽取第一个子菜单作为真正使用的 popup。
-    let menu = LoadMenuW(hinstance, make_int_resource(resource_id));
-    if menu.is_null() {
-        return null_mut();
-    }
-    localize_menu(menu, resource_id);
-    let popup = GetSubMenu(menu, 0);
-    RemoveMenu(menu, 0, MF_BYPOSITION);
-    windows_sys::Win32::UI::WindowsAndMessaging::DestroyMenu(menu);
-    sanitize_task_manager_menu(popup, usize::MAX);
-    popup
+unsafe fn load_popup_menu(
+    hinstance: HINSTANCE,
+    resource_id: u16,
+) -> windows_sys::Win32::UI::WindowsAndMessaging::HMENU {
+    let _ = hinstance;
+    build_popup_menu(resource_id, usize::MAX).unwrap_or(null_mut())
 }
 
 unsafe fn window_rect_relative_to_page(hwnd: HWND, page_hwnd: HWND) -> RECT {
@@ -983,25 +1084,9 @@ unsafe fn window_rect_relative_to_page(hwnd: HWND, page_hwnd: HWND) -> RECT {
 }
 
 unsafe fn collect_tasks_worker(main_hwnd: isize) -> Vec<WorkerTaskEntry> {
-    // 后台线程优先尝试枚举所有可访问窗口站；
-    // 如果结果为空，再回退到当前窗口站，兼顾完整性和稳健性。
-    let mut tasks = Vec::new();
-    let mut context = WindowStationEnumContext {
-        tasks: &mut tasks as *mut Vec<WorkerTaskEntry>,
-        main_hwnd: main_hwnd as HWND,
-        winstation: String::new(),
-    };
-
-    if EnumWindowStationsW(
-        Some(enum_winstation_proc),
-        &mut context as *mut WindowStationEnumContext as LPARAM,
-    ) == 0
-        || tasks.is_empty()
-    {
-        return collect_tasks_current_winsta_worker(main_hwnd as HWND);
-    }
-
-    tasks
+    // SetProcessWindowStation 是进程级设置，不能在后台线程调用，
+    // 因此工作线程只枚举当前窗口站，跨窗口站的枚举在 UI 线程完成。
+    collect_tasks_current_winsta_worker(main_hwnd as HWND)
 }
 
 unsafe fn collect_tasks_current_winsta(main_hwnd: HWND) -> Vec<WorkerTaskEntry> {
@@ -1009,11 +1094,15 @@ unsafe fn collect_tasks_current_winsta(main_hwnd: HWND) -> Vec<WorkerTaskEntry> 
 }
 
 unsafe fn collect_tasks_current_winsta_worker(main_hwnd: HWND) -> Vec<WorkerTaskEntry> {
-    let mut tasks = Vec::new();
-    let winstation =
-        current_user_object_name(GetProcessWindowStation() as HANDLE).unwrap_or_else(|| "WinSta0".to_string());
+    let mut tasks = Vec::with_capacity(64);
+    let mut seen_hwnds = HashSet::new();
+    let mut bitness_by_pid = HashMap::with_capacity(64);
+    let winstation = current_user_object_name(GetProcessWindowStation() as HANDLE)
+        .unwrap_or_else(|| "WinSta0".to_string());
     let mut context = WindowStationEnumContext {
         tasks: &mut tasks as *mut Vec<WorkerTaskEntry>,
+        seen_hwnds: &mut seen_hwnds as *mut HashSet<isize>,
+        bitness_by_pid: &mut bitness_by_pid as *mut HashMap<u32, bool>,
         main_hwnd,
         winstation,
     };
@@ -1023,12 +1112,16 @@ unsafe fn collect_tasks_current_winsta_worker(main_hwnd: HWND) -> Vec<WorkerTask
 
 struct WindowStationEnumContext {
     tasks: *mut Vec<WorkerTaskEntry>,
+    seen_hwnds: *mut HashSet<isize>,
+    bitness_by_pid: *mut HashMap<u32, bool>,
     main_hwnd: HWND,
     winstation: String,
 }
 
 struct WindowEnumContext {
     tasks: *mut Vec<WorkerTaskEntry>,
+    seen_hwnds: *mut HashSet<isize>,
+    bitness_by_pid: *mut HashMap<u32, bool>,
     main_hwnd: HWND,
     winstation: String,
     desktop: String,
@@ -1042,18 +1135,15 @@ unsafe extern "system" fn enum_desktop_proc(desktop_name: *const u16, lparam: LP
     }
 
     let desktop = widestr_ptr_to_string(desktop_name);
-    let desktop_handle = OpenDesktopW(
-        desktop_name,
-        0,
-        0,
-        DESKTOP_ENUMERATE | DESKTOP_READOBJECTS,
-    );
+    let desktop_handle = OpenDesktopW(desktop_name, 0, 0, DESKTOP_ENUMERATE | DESKTOP_READOBJECTS);
     if desktop_handle.is_null() {
         return 1;
     }
 
     let mut window_context = WindowEnumContext {
         tasks: context.tasks,
+        seen_hwnds: context.seen_hwnds,
+        bitness_by_pid: context.bitness_by_pid,
         main_hwnd: context.main_hwnd,
         winstation: context.winstation.clone(),
         desktop,
@@ -1064,46 +1154,6 @@ unsafe extern "system" fn enum_desktop_proc(desktop_name: *const u16, lparam: LP
         &mut window_context as *mut WindowEnumContext as LPARAM,
     );
     CloseDesktop(desktop_handle);
-    1
-}
-
-unsafe extern "system" fn enum_winstation_proc(winstation_name: *const u16, lparam: LPARAM) -> BOOL {
-    // 跨窗口站枚举前必须暂时切换进程窗口站，
-    // 枚举结束后再恢复原值，否则会污染当前 UI 线程上下文。
-    let context = &mut *(lparam as *mut WindowStationEnumContext);
-    if winstation_name.is_null() {
-        return 1;
-    }
-
-    let winstation_handle = OpenWindowStationW(winstation_name, 0, MAXIMUM_ALLOWED_ACCESS);
-    if winstation_handle.is_null() {
-        return 1;
-    }
-
-    let previous_winstation = GetProcessWindowStation();
-    if previous_winstation.is_null() {
-        CloseWindowStation(winstation_handle);
-        return 1;
-    }
-
-    if SetProcessWindowStation(winstation_handle) == 0 {
-        if winstation_handle != previous_winstation {
-            CloseWindowStation(winstation_handle);
-        }
-        return 1;
-    }
-
-    context.winstation = widestr_ptr_to_string(winstation_name);
-    EnumDesktopsW(
-        winstation_handle,
-        Some(enum_desktop_proc),
-        lparam,
-    );
-
-    SetProcessWindowStation(previous_winstation);
-    if winstation_handle != previous_winstation {
-        CloseWindowStation(winstation_handle);
-    }
     1
 }
 
@@ -1119,27 +1169,41 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     }
 
     let mut buffer = vec![0u16; 260];
-    let length = InternalGetWindowText(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
-    if length <= 0 {
+    let length = InternalGetWindowText(
+        hwnd,
+        buffer.as_mut_ptr(),
+        i32::try_from(buffer.len()).expect("InternalGetWindowText buffer length fits in i32"),
+    );
+    let Ok(length) = usize::try_from(length) else {
         return 1;
-    }
+    };
 
-    let title = String::from_utf16_lossy(&buffer[..length as usize]);
+    let title = String::from_utf16_lossy(&buffer[..length]);
     if title.is_empty() || title.eq_ignore_ascii_case("Program Manager") {
         return 1;
     }
 
     let mut pid = 0u32;
     GetWindowThreadProcessId(hwnd, &mut pid);
-    let tasks = &mut *context.tasks;
-    if tasks.iter().any(|task| task.hwnd == hwnd as isize) {
+    let seen_hwnds = &mut *context.seen_hwnds;
+    if !seen_hwnds.insert(hwnd as isize) {
         return 1;
     }
-
+    let bitness_by_pid = &mut *context.bitness_by_pid;
+    let is_32_bit = if pid == 0 {
+        false
+    } else if let Some(&cached) = bitness_by_pid.get(&pid) {
+        cached
+    } else {
+        let detected = is_32_bit_process_pid(pid);
+        bitness_by_pid.insert(pid, detected);
+        detected
+    };
+    let tasks = &mut *context.tasks;
     tasks.push(WorkerTaskEntry {
         hwnd: hwnd as isize,
         title,
-        is_32_bit: pid != 0 && is_32_bit_process_pid(pid),
+        is_32_bit,
         winstation: context.winstation.clone(),
         desktop: context.desktop.clone(),
         is_hung: IsHungAppWindow(hwnd) != 0,
@@ -1156,10 +1220,13 @@ unsafe fn enum_desktops_for_current_winsta(context: &mut WindowStationEnumContex
         context as *mut WindowStationEnumContext as LPARAM,
     ) == 0
     {
-        let fallback_desktop = current_user_object_name(GetThreadDesktop(GetCurrentThreadId()) as HANDLE)
-            .unwrap_or_else(|| "Default".to_string());
+        let fallback_desktop =
+            current_user_object_name(GetThreadDesktop(GetCurrentThreadId()) as HANDLE)
+                .unwrap_or_else(|| "Default".to_string());
         let mut fallback_context = WindowEnumContext {
             tasks: context.tasks,
+            seen_hwnds: context.seen_hwnds,
+            bitness_by_pid: context.bitness_by_pid,
             main_hwnd: context.main_hwnd,
             winstation: context.winstation.clone(),
             desktop: fallback_desktop,
@@ -1193,7 +1260,10 @@ unsafe fn current_user_object_name(handle: HANDLE) -> Option<String> {
         return None;
     }
 
-    let length = buffer.iter().position(|&value| value == 0).unwrap_or(buffer.len());
+    let length = buffer
+        .iter()
+        .position(|&value| value == 0)
+        .unwrap_or(buffer.len());
     Some(String::from_utf16_lossy(&buffer[..length]))
 }
 
@@ -1254,13 +1324,24 @@ unsafe fn query_class_icon(hwnd: HWND, class_index: i32) -> HICON {
     }
 }
 
-fn compare_tasks(left: &TaskEntry, right: &TaskEntry, sort_column: TaskColumnId, sort_direction: i32) -> Ordering {
+fn compare_tasks(
+    left: &TaskEntry,
+    right: &TaskEntry,
+    sort_column: TaskColumnId,
+    sort_direction: i32,
+) -> Ordering {
     // 排序的最后兜底键是窗口句柄，保证同值情况下结果稳定，不会每轮刷新都乱跳。
     let ordering = match sort_column {
         TaskColumnId::Name => left.title.to_lowercase().cmp(&right.title.to_lowercase()),
         TaskColumnId::Status => left.is_hung.cmp(&right.is_hung),
-        TaskColumnId::Winstation => left.winstation.to_lowercase().cmp(&right.winstation.to_lowercase()),
-        TaskColumnId::Desktop => left.desktop.to_lowercase().cmp(&right.desktop.to_lowercase()),
+        TaskColumnId::Winstation => left
+            .winstation
+            .to_lowercase()
+            .cmp(&right.winstation.to_lowercase()),
+        TaskColumnId::Desktop => left
+            .desktop
+            .to_lowercase()
+            .cmp(&right.desktop.to_lowercase()),
     };
 
     let ordering = if ordering == Ordering::Equal {
@@ -1294,16 +1375,29 @@ unsafe fn add_icon(imagelist: HIMAGELIST, icon: HICON, default_icon: HICON) -> u
     // 自己复制得到的图标句柄在加入 ImageList 后就可以释放；
     // 默认图标是共享资源，不应在这里销毁。
     let uses_default_icon = icon.is_null();
-    let icon_handle = if uses_default_icon { default_icon } else { icon };
+    let icon_handle = if uses_default_icon {
+        default_icon
+    } else {
+        icon
+    };
     let index = ImageList_ReplaceIcon(imagelist, -1, icon_handle);
     if !uses_default_icon {
         DestroyIcon(icon);
     }
-    if index < 0 { 0 } else { index as usize }
+    if index < 0 {
+        0
+    } else {
+        index as usize
+    }
 }
 
 impl TaskEntry {
-    fn from_worker(worker: WorkerTaskEntry, small_icon: usize, large_icon: usize, pass_count: u64) -> Self {
+    fn from_worker(
+        worker: WorkerTaskEntry,
+        small_icon: usize,
+        large_icon: usize,
+        pass_count: u64,
+    ) -> Self {
         Self {
             hwnd: worker.hwnd as HWND,
             title: worker.title,
