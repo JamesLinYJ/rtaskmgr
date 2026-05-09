@@ -57,7 +57,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SW_RESTORE, TPM_RETURNCMD, WM_COMMAND, WM_GETICON, WM_SETREDRAW,
 };
 
-use crate::assets::load_icon_from_file;
+use crate::assets::{load_icon_resource, DEFAULT_ICON_RESOURCE};
 use crate::language::{text, TextKey};
 use crate::menus::build_popup_menu;
 use crate::options::{Options, ViewMode};
@@ -267,7 +267,7 @@ impl TaskPageState {
                 windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
                     windows_sys::Win32::UI::WindowsAndMessaging::SM_CYSMICON,
                 ),
-                0x21, // ILC_COLOR32 | ILC_MASK
+                0x21, // ILC_COLOR32 | ILC_MASK（32 位色深 + 掩码）
                 1,
                 1,
             );
@@ -278,7 +278,7 @@ impl TaskPageState {
                 windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
                     windows_sys::Win32::UI::WindowsAndMessaging::SM_CYICON,
                 ),
-                0x21, // ILC_COLOR32 | ILC_MASK
+                0x21, // ILC_COLOR32 | ILC_MASK（32 位色深 + 掩码）
                 1,
                 1,
             );
@@ -286,8 +286,8 @@ impl TaskPageState {
                 return Err(windows_sys::Win32::Foundation::GetLastError());
             }
 
-            self.default_small_icon = load_icon_from_file(
-                "default.ico",
+            self.default_small_icon = load_icon_resource(
+                DEFAULT_ICON_RESOURCE,
                 windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
                     windows_sys::Win32::UI::WindowsAndMessaging::SM_CXSMICON,
                 ),
@@ -296,8 +296,8 @@ impl TaskPageState {
                 ),
                 0,
             );
-            self.default_large_icon = load_icon_from_file(
-                "default.ico",
+            self.default_large_icon = load_icon_resource(
+                DEFAULT_ICON_RESOURCE,
                 windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
                     windows_sys::Win32::UI::WindowsAndMessaging::SM_CXICON,
                 ),
@@ -1175,6 +1175,7 @@ impl TaskPageState {
     }
 }
 
+// 从资源加载弹出菜单。当前始终通过 build_popup_menu 构造，忽略 hinstance。
 fn load_popup_menu(
     hinstance: HINSTANCE,
     resource_id: u16,
@@ -1222,6 +1223,7 @@ fn collect_tasks_current_winsta_worker(main_hwnd: HWND) -> Vec<WorkerTaskEntry> 
     }
 }
 
+// 窗口站级别的枚举上下文，传递给 enum_desktop_proc 回调。
 struct WindowStationEnumContext {
     tasks: *mut Vec<WorkerTaskEntry>,
     seen_hwnds: *mut HashSet<isize>,
@@ -1230,6 +1232,7 @@ struct WindowStationEnumContext {
     winstation: String,
 }
 
+// 桌面级别的枚举上下文，传递给 enum_window_proc 回调。
 struct WindowEnumContext {
     tasks: *mut Vec<WorkerTaskEntry>,
     seen_hwnds: *mut HashSet<isize>,
@@ -1387,6 +1390,8 @@ fn current_user_object_name(handle: HANDLE) -> Option<String> {
     }
 }
 
+// 获取窗口图标。先尝试 WM_GETICON（大/小图标），再回退到类图标。
+// 句柄通过 CopyIcon 复制，调用方负责释放。
 fn fetch_window_icon(hwnd: HWND, small: bool) -> HICON {
     // 图标获取只走窗口自身暴露的 HICON 链路：
     // 先查 WM_GETICON，再回退到类图标；同时复制句柄，确保后续释放是安全的。
@@ -1417,6 +1422,8 @@ fn fetch_window_icon(hwnd: HWND, small: bool) -> HICON {
     null_mut()
 }
 
+// 通过 SendMessageTimeoutW(WM_GETICON) 查询窗口图标。
+// 超时使用 SMTO_ABORTIFHUNG 防止阻塞在挂起窗口上。
 fn query_window_icon(hwnd: HWND, icon_type: usize) -> HICON {
     // 安全性: this function is a safe facade over Win32/FFI work; all callers run it on the owning UI thread and the existing body preserves its original handle/pointer invariants.
     unsafe {
@@ -1438,6 +1445,7 @@ fn query_window_icon(hwnd: HWND, icon_type: usize) -> HICON {
     }
 }
 
+// 通过 GetClassLongPtrW 查询窗口类默认图标。
 fn query_class_icon(hwnd: HWND, class_index: i32) -> HICON {
     // 安全性: this function is a safe facade over Win32/FFI work; all callers run it on the owning UI thread and the existing body preserves its original handle/pointer invariants.
     unsafe {
@@ -1506,18 +1514,21 @@ fn add_icon(imagelist: HIMAGELIST, icon: HICON, default_icon: HICON) -> usize {
     }
 }
 
+// 规范化删除的图标索引：排除索引 0（默认图标）、去重、排序。
 fn normalize_removed_icon_indices(indices: &mut Vec<usize>) {
     indices.retain(|index| *index > 0);
     indices.sort_unstable();
     indices.dedup();
 }
 
+// 从 ImageList 中删除指定索引的图标。必须从大到小删除，避免索引错位。
 unsafe fn remove_imagelist_indices(imagelist: HIMAGELIST, indices: &[usize]) {
     for &index in indices.iter().rev() {
         ImageList_Remove(imagelist, index as i32);
     }
 }
 
+// 调整条目图标索引：删除某些图标后，后续图标的索引需要前移。
 fn adjusted_icon_index(index: usize, removed_indices: &[usize]) -> usize {
     if index == 0 {
         return 0;
@@ -1530,6 +1541,8 @@ fn adjusted_icon_index(index: usize, removed_indices: &[usize]) -> usize {
     index.saturating_sub(removed_before)
 }
 
+// 将工作线程采集的 WorkerTaskEntry 转换为 UI 线程的 TaskEntry。
+// small_icon / large_icon 是 ImageList 中的索引而非原始 HICON。
 impl TaskEntry {
     fn from_worker(
         worker: WorkerTaskEntry,

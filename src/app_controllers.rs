@@ -17,7 +17,7 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{HICON, HMENU, LR_DEFAULTCOLOR, LR_DEFAULTSIZE};
 
-use crate::assets::{load_icon_from_file, TRAY_ICON_FILES};
+use crate::assets::{load_icon_resource, TRAY_ICON_RESOURCES};
 use crate::perfpage::PerformanceSnapshot;
 use crate::resource::PWM_TRAYICON;
 use crate::winutil::{format_resource_string, to_wide_null};
@@ -97,7 +97,7 @@ pub struct TrayController {
 impl Default for TrayController {
     fn default() -> Self {
         Self {
-            icons: Vec::with_capacity(TRAY_ICON_FILES.len()),
+            icons: Vec::with_capacity(TRAY_ICON_RESOURCES.len()),
         }
     }
 }
@@ -105,9 +105,9 @@ impl Default for TrayController {
 impl TrayController {
     pub fn load_icons(&mut self) {
         self.icons.clear();
-        for file_name in TRAY_ICON_FILES {
+        for resource_name in TRAY_ICON_RESOURCES {
             let icon_handle =
-                load_icon_from_file(file_name, 0, 0, LR_DEFAULTCOLOR | LR_DEFAULTSIZE);
+                load_icon_resource(resource_name, 0, 0, LR_DEFAULTCOLOR | LR_DEFAULTSIZE);
             self.icons.push(icon_handle);
         }
     }

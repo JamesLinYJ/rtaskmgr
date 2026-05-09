@@ -1,6 +1,6 @@
 //! Windows 构建期资源注入脚本。
 //! 这里负责两件事：
-//! 1. 把图标和 manifest 嵌进最终 exe。
+//! 1. 把图标、位图和 manifest 嵌进最终 exe。
 //! 2. 在编译期读取 TOML 语言文件并生成静态本地化查表代码。
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -59,6 +59,34 @@ const MENU_STATUS_HELP_KEYS: &[(&str, &str)] = &[
     ),
 ];
 
+const EMBEDDED_ICON_RESOURCES: &[(&str, &str)] = &[
+    ("APP_MAIN_ICON", "main.ico"),
+    ("APP_DEFAULT_ICON", "default.ico"),
+    ("APP_TRAY_0_ICON", "tray0.ico"),
+    ("APP_TRAY_1_ICON", "tray1.ico"),
+    ("APP_TRAY_2_ICON", "tray2.ico"),
+    ("APP_TRAY_3_ICON", "tray3.ico"),
+    ("APP_TRAY_4_ICON", "tray4.ico"),
+    ("APP_TRAY_5_ICON", "tray5.ico"),
+    ("APP_TRAY_6_ICON", "tray6.ico"),
+    ("APP_TRAY_7_ICON", "tray7.ico"),
+    ("APP_TRAY_8_ICON", "tray8.ico"),
+    ("APP_TRAY_9_ICON", "tray9.ico"),
+    ("APP_TRAY_10_ICON", "tray10.ico"),
+    ("APP_TRAY_11_ICON", "tray11.ico"),
+];
+
+const EMBEDDED_BITMAP_RESOURCES: &[(&str, &str)] = &[
+    ("APP_BITMAP_STRIP_LIT_RED", "bitmap1.bmp"),
+    ("APP_BITMAP_2", "bitmap2.bmp"),
+    ("APP_BITMAP_00001", "bmp00001.bmp"),
+    ("APP_BITMAP_BACK", "bmpback.bmp"),
+    ("APP_BITMAP_FORWARD", "bmpforwa.bmp"),
+    ("APP_BITMAP_STRIP_LIT", "ledlit.bmp"),
+    ("APP_BITMAP_STRIP_UNLIT", "ledunlit.bmp"),
+    ("APP_BITMAP_NUMBERS", "numbers.bmp"),
+];
+
 fn main() {
     generate_localization();
 
@@ -75,6 +103,7 @@ fn main() {
 
     let mut resources = winres::WindowsResource::new();
     resources.set_icon("main.ico");
+    append_embedded_assets(&mut resources);
     if let Err(error) = resources.compile() {
         panic!("failed to compile Windows icon resources: {error}");
     }
@@ -93,6 +122,22 @@ fn main() {
         // 仅在 release 产物里要求管理员权限。
         println!("cargo:rustc-link-arg=/MANIFESTUAC:level='requireAdministrator' uiAccess='false'");
     }
+}
+
+fn append_embedded_assets(resources: &mut winres::WindowsResource) {
+    let mut rc_content = String::new();
+
+    for (resource_name, file_name) in EMBEDDED_ICON_RESOURCES {
+        println!("cargo:rerun-if-changed={file_name}");
+        writeln!(rc_content, "{resource_name} ICON \"{file_name}\"").unwrap();
+    }
+
+    for (resource_name, file_name) in EMBEDDED_BITMAP_RESOURCES {
+        println!("cargo:rerun-if-changed={file_name}");
+        writeln!(rc_content, "{resource_name} BITMAP \"{file_name}\"").unwrap();
+    }
+
+    resources.append_rc_content(&rc_content);
 }
 
 fn generate_localization() {

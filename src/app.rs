@@ -60,7 +60,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::app_controllers::{
     MenuController, RuntimeStatsController, TrayController, WindowModeController,
 };
-use crate::assets::{create_accelerator_table, load_icon_from_file};
+use crate::assets::{create_accelerator_table, load_icon_resource, MAIN_ICON_RESOURCE};
 use crate::dialog_templates::create_dialog;
 use crate::language::{localize_dialog, menu_status_help, text, TextKey};
 use crate::menus::build_popup_menu;
@@ -1278,7 +1278,8 @@ impl App {
                 to_wide_null(&env::current_dir().unwrap_or_default().to_string_lossy());
             let mut title = to_wide_null(text(TextKey::RunTitle));
             let mut prompt = to_wide_null(text(TextKey::RunPrompt));
-            let icon = load_icon_from_file("main.ico", 0, 0, LR_DEFAULTCOLOR | LR_DEFAULTSIZE);
+            let icon =
+                load_icon_resource(MAIN_ICON_RESOURCE, 0, 0, LR_DEFAULTCOLOR | LR_DEFAULTSIZE);
 
             let shown = if !icon.is_null() {
                 run_file_dlg(
@@ -1391,8 +1392,12 @@ impl App {
                 }
                 IDM_ABOUT => {
                     let title = to_wide_null(&self.strings.app_title);
-                    let icon =
-                        load_icon_from_file("main.ico", 0, 0, LR_DEFAULTCOLOR | LR_DEFAULTSIZE);
+                    let icon = load_icon_resource(
+                        MAIN_ICON_RESOURCE,
+                        0,
+                        0,
+                        LR_DEFAULTCOLOR | LR_DEFAULTSIZE,
+                    );
                     if !icon.is_null() {
                         ShellAboutW(hwnd, title.as_ptr(), null(), icon);
                         destroy_icon_handle(icon);
@@ -1654,7 +1659,8 @@ unsafe extern "system" fn main_window_proc(
             application.tray.load_icons();
             // 安全性: main HWND is live; icon and tray setup after deferred icon loading.
             unsafe {
-                let icon = load_icon_from_file("main.ico", 0, 0, LR_DEFAULTCOLOR | LR_DEFAULTSIZE);
+                let icon =
+                    load_icon_resource(MAIN_ICON_RESOURCE, 0, 0, LR_DEFAULTCOLOR | LR_DEFAULTSIZE);
                 if !icon.is_null() {
                     SendMessageW(hwnd, WM_SETICON, 1, icon as LPARAM);
                 }

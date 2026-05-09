@@ -19,7 +19,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SWP_NOACTIVATE, SWP_NOREDRAW, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WM_SETREDRAW,
 };
 
-use crate::assets::load_bitmap_from_file;
+use crate::assets::{
+    load_bitmap_resource, STRIP_LIT_BITMAP_RESOURCE, STRIP_LIT_RED_BITMAP_RESOURCE,
+    STRIP_UNLIT_BITMAP_RESOURCE,
+};
 use crate::chart_renderer::{ChartColor, ChartRenderer};
 use crate::drawing::{fill_black, push_history, rgb};
 use crate::options::{CpuHistoryMode, Options};
@@ -999,9 +1002,9 @@ impl PerformancePageState {
             return;
         }
 
-        self.strip_lit_bitmap = load_bitmap_from_file("ledlit.bmp");
-        self.strip_lit_red_bitmap = load_bitmap_from_file("bitmap1.bmp");
-        self.strip_unlit_bitmap = load_bitmap_from_file("ledunlit.bmp");
+        self.strip_lit_bitmap = load_bitmap_resource(STRIP_LIT_BITMAP_RESOURCE);
+        self.strip_lit_red_bitmap = load_bitmap_resource(STRIP_LIT_RED_BITMAP_RESOURCE);
+        self.strip_unlit_bitmap = load_bitmap_resource(STRIP_UNLIT_BITMAP_RESOURCE);
     }
 
     fn draw_strip_meter(
