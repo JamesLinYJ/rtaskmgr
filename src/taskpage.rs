@@ -4,6 +4,23 @@ use std::collections::{HashMap, HashSet};
 // 应用页实现。
 // 该模块枚举顶层窗口，将其映射为任务列表中的行，并提供切换、平铺、
 // 层叠、最小化、结束任务等窗口级操作。
+//
+// 图标流动：
+//   1. Worker 线程在工作站/桌面枚举期间通过 fetch_window_icon() 抓取窗口图标（后台线程）。
+//   2. 图标句柄通过 mpsc channel 传递回 UI 线程。
+//   3. UI 线程在 refresh_tasks() 中将图标加入 ImageList，并在 TaskEntry 中记录图标索引。
+//   4. 默认图标 (default.ico) 用于没有自定义图标的窗口，作为 ImageList 的索引 0。
+//   5. 任务移除时，remove_stale_tasks() 回收对应的 ImageList 槽位并调整剩余条目的图标索引。
+//
+// 线程模型：
+//   WorkerCommand 工作线程在后台执行 collect_tasks_worker()（枚举窗口 + 抓取图标）。
+//   UI 线程通过 mpsc channel 发送命令并同步等待采集结果。
+//   线程退出时发送 Shutdown 命令并 join。
+//
+// 缓存失效策略：
+//   hwnd_to_index (HashMap) 在每次排序或刷新后从头重建。
+//   bitness_by_pid (HashMap) 在枚举窗口时按需填充并缓存，提升同进程多窗口的效率。
+//   DirtyTaskColumns 作为列级脏标记，避免 ListView 全量重绘。
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 use std::sync::mpsc::{channel, Sender};
@@ -72,6 +89,7 @@ const ICON_SMALL2: usize = 2;
 const DEFAULT_MARGIN: i32 = 8;
 const TEXT_CALLBACK_WIDE: *mut u16 = -1isize as *mut u16;
 
+// 外部函数 EndTask（user32），用于强制结束指定窗口的任务。
 #[link(name = "user32")]
 unsafe extern "system" {
     fn EndTask(hwnd: HWND, shutdown: BOOL, force: BOOL) -> BOOL;
@@ -113,6 +131,9 @@ pub struct TaskEntry {
     dirty_columns: DirtyTaskColumns,
 }
 
+// 工作线程采集到的任务条目，包含顶层窗口基本信息和已抓取的图标句柄。
+// small_icon / large_icon 在后台线程中以 isize（HICON）形式存储，
+// 传递到 UI 线程后再通过 add_icon() 加入 ImageList 并转换为索引。
 struct WorkerTaskEntry {
     // 后台线程负责窗口枚举和图标抓取；图标句柄通过 channel 安全传递回 UI 线程。
     hwnd: isize,
@@ -125,6 +146,14 @@ struct WorkerTaskEntry {
     large_icon: isize,
 }
 
+// 工作线程命令枚举。
+// Collect: 在后台线程枚举窗口 + 抓取图标，结果通过 reply channel 返回。
+// Shutdown: 通知线程退出主循环。
+//
+// 线程生命周期：
+//   1. prepare_initialize() 中 start_worker_thread() 创建线程。
+//   2. 每轮 refresh_tasks() -> collect_tasks() 发送 Collect 命令，同步等待。
+//   3. destroy() 中 stop_worker_thread() 发送 Shutdown + join。
 enum WorkerCommand {
     // 后台线程当前只负责枚举任务窗口和有序退出。
     Collect {
@@ -145,6 +174,7 @@ impl TaskEntry {
     }
 }
 
+// 任务页列级脏标记位图，与进程页的 DirtyColumns 设计相同。
 #[derive(Clone, Copy, Default)]
 struct DirtyTaskColumns(u32);
 
@@ -819,6 +849,7 @@ impl TaskPageState {
         self.worker_thread = Some(worker);
     }
 
+    // 发送 Shutdown 命令并等待工作线程退出。清理线程句柄和 channel。
     fn stop_worker_thread(&mut self) {
         if let Some(sender) = self.worker_sender.take() {
             let _ = sender.send(WorkerCommand::Shutdown);
@@ -1166,6 +1197,7 @@ fn collect_tasks_worker(main_hwnd: isize) -> Vec<WorkerTaskEntry> {
     tasks
 }
 
+// 回退方案：在 UI 线程同步枚举当前窗口站的任务（不抓取图标）。
 fn collect_tasks_current_winsta(main_hwnd: HWND) -> Vec<WorkerTaskEntry> {
     collect_tasks_current_winsta_worker(main_hwnd)
 }
